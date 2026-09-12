@@ -1174,6 +1174,9 @@ label {
 .modal .range-field {
   margin: 20px 0;
 }
+.crop-reset {
+  margin-right: auto;
+}
 .modal-actions {
   display: flex;
   justify-content: flex-end;

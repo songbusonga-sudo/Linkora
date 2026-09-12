@@ -84,6 +84,7 @@ export type CodeInput = {
   image: string;
   content?: string;
   crop?: Crop;
+  defaultCrop?: Crop;
   confirmed: boolean;
   name: string;
 };

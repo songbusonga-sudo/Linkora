@@ -71,6 +71,7 @@ export default function Studio() {
     [crop, setCrop] = useState<{
       src: string;
       initial: Crop;
+      defaultCrop?: Crop;
       title: string;
       kind?: CodeKind;
       nodeId?: string;
@@ -151,9 +152,11 @@ export default function Studio() {
     try {
       const image = await readImage(file);
       if (kind === "reward") {
+        const automaticCrop = await suggestCrop(image);
         setCrop({
           src: image,
-          initial: await suggestCrop(image),
+          initial: automaticCrop,
+          defaultCrop: automaticCrop,
           title: "定位与裁切赞赏码",
           kind,
           fileName: file.name,
@@ -483,6 +486,7 @@ export default function Studio() {
                                 setCrop({
                                   src: codes.reward!.image,
                                   initial: codes.reward!.crop!,
+                                  defaultCrop: codes.reward!.defaultCrop,
                                   title: "微调赞赏码取景",
                                   kind: "reward",
                                   fileName: codes.reward!.name,
@@ -707,6 +711,7 @@ export default function Studio() {
                             setCrop({
                               src: codes.reward.image,
                               initial: codes.reward.crop!,
+                              defaultCrop: codes.reward.defaultCrop,
                               title: "微调赞赏码取景",
                               kind: "reward",
                               fileName: codes.reward.name,
@@ -1009,16 +1014,18 @@ export default function Studio() {
         <CropDialog
           src={crop.src}
           initial={crop.initial}
+          defaultCrop={crop.defaultCrop}
           title={crop.title}
           reward={crop.kind === "reward"}
           onClose={() => setCrop(undefined)}
-          onConfirm={(bounds, url) => {
+          onConfirm={(bounds, url, defaultCrop) => {
             if (crop.kind)
               setCodes((c) => ({
                 ...c,
                 [crop.kind!]: {
                   image: crop.src,
                   crop: bounds,
+                  defaultCrop,
                   confirmed: true,
                   name: crop.fileName,
                 },

@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Crop } from "@/lib/model";
-import { cropImage, loadImage } from "@/lib/images";
+import { cropImage, loadImage, suggestCrop } from "@/lib/images";
 export function Header({ admin = false }: { admin?: boolean }) {
   return (
     <header className="header">
@@ -85,6 +85,7 @@ export function UploadButton({
 export function CropDialog({
   src,
   initial,
+  defaultCrop,
   title,
   onClose,
   onConfirm,
@@ -92,15 +93,41 @@ export function CropDialog({
 }: {
   src: string;
   initial: Crop;
+  defaultCrop?: Crop;
   title: string;
   onClose: () => void;
-  onConfirm: (crop: Crop, url: string) => void;
+  onConfirm: (crop: Crop, url: string, defaultCrop: Crop) => void;
   reward?: boolean;
 }) {
   const [crop, setCrop] = useState(initial),
     [size, setSize] = useState({ w: 1, h: 1 }),
     [busy, setBusy] = useState(false);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const [resetBounds, setResetBounds] = useState<Crop | undefined>(
+    defaultCrop ?? (reward ? undefined : initial),
+  );
+  const [resetError, setResetError] = useState("");
+  useEffect(() => {
+    let active = true;
+    setResetError("");
+    if (defaultCrop || !reward) {
+      setResetBounds({ ...(defaultCrop ?? initial) });
+    } else {
+      // Recover the automatic crop for images already uploaded before this
+      // feature was added; never use a manually adjusted crop as the default.
+      setResetBounds(undefined);
+      suggestCrop(src)
+        .then((bounds) => {
+          if (active) setResetBounds(bounds);
+        })
+        .catch(() => {
+          if (active) setResetError("自动定位未能完成，请重新上传图片后重试。");
+        });
+    }
+    return () => {
+      active = false;
+    };
+  }, [src, defaultCrop, initial, reward]);
   useEffect(() => {
     let active = true;
     loadImage(src).then((im) => {
@@ -205,16 +232,28 @@ export function CropDialog({
           </div>
         )}
         <div className="modal-actions">
+          <button
+            type="button"
+            className="secondary crop-reset"
+            disabled={busy || !resetBounds}
+            title={reward ? "恢复自动定位的取景位置与范围" : "恢复初始取景"}
+            onClick={() => {
+              if (resetBounds) setCrop({ ...resetBounds });
+            }}
+          >
+            <RotateCcw size={15} />
+            恢复默认
+          </button>
           <button className="secondary" onClick={onClose}>
             取消
           </button>
           <button
             className="primary"
-            disabled={busy}
+            disabled={busy || !resetBounds}
             onClick={async () => {
               setBusy(true);
               try {
-                onConfirm(crop, await cropImage(src, crop));
+                onConfirm(crop, await cropImage(src, crop), resetBounds!);
               } finally {
                 setBusy(false);
               }
@@ -223,6 +262,11 @@ export function CropDialog({
             {busy ? "处理中…" : "确认取景"}
           </button>
         </div>
+        {resetError && (
+          <p className="help-text" role="alert">
+            {resetError}
+          </p>
+        )}
       </section>
     </div>
   );
