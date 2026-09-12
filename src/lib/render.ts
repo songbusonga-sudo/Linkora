@@ -133,6 +133,23 @@ export async function drawTemplate(
       dw = n.width,
       dh = n.height;
     if (src !== n.src) {
+      // The fixed white cover belongs below the replaceable artwork in the
+      // supplied PSD. Keep it when an uploaded/preset image is transparent.
+      // These IDs are from the first-template mapping, not user-selectable layers.
+      if (n.role === "rewardAvatar" && n.id === "7-2") {
+        const cover = await image("/private-assets/layer-7-2-0.png");
+        ctx.drawImage(cover, n.x, n.y, n.width, n.height);
+      }
+      if (n.role === "rewardIcon" && n.id === "7-4") {
+        const cover = await image("/private-assets/layer-7-4-0.png");
+        ctx.drawImage(
+          cover,
+          n.x + n.width / 66,
+          n.y,
+          (n.width * 59) / 66,
+          n.height,
+        );
+      }
       if (n.role === "background") {
         ctx.beginPath();
         ctx.rect(0, 0, t.width, t.height);

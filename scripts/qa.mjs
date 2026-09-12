@@ -61,12 +61,27 @@ assert.equal(
   await page.getByRole("button", { name: "下一步" }).isDisabled(),
   true,
 );
+const rewardPng = await page.evaluate(async () => {
+  const im = new Image();
+  im.src = "/private-assets/layer-7-1.png";
+  await im.decode();
+  const c = document.createElement("canvas");
+  c.width = im.width;
+  c.height = im.height;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(im, 0, 0);
+  ctx.fillStyle = "#ff00ff";
+  ctx.fillRect(c.width / 2 - 35, c.height / 2 - 35, 70, 70);
+  return c.toDataURL().split(",")[1];
+});
+writeFileSync(".local/qa/reward-fixture.png", Buffer.from(rewardPng, "base64"));
 await page
   .locator(".code-upload")
   .nth(2)
   .locator("input[type=file]")
-  .setInputFiles("public/private-assets/layer-7-1.png");
+  .setInputFiles(".local/qa/reward-fixture.png");
 await page.getByRole("dialog").waitFor();
+await page.getByRole("slider", { name: "取景范围", exact: true }).press("End");
 await page.getByRole("button", { name: "确认取景" }).click();
 await page.getByRole("button", { name: "下一步" }).click();
 await page
@@ -76,6 +91,41 @@ assert.ok(
   Array.from(
     await page.getByRole("textbox", { name: "署名", exact: true }).inputValue(),
   ).length <= 12,
+);
+await page.getByRole("button", { name: "赞赏码", exact: true }).click();
+const transparent = await page.evaluate(() => {
+  const c = document.createElement("canvas");
+  c.width = 200;
+  c.height = 200;
+  return c.toDataURL().split(",")[1];
+});
+writeFileSync(
+  ".local/qa/transparent-avatar.png",
+  Buffer.from(transparent, "base64"),
+);
+await page
+  .locator(".content-controls input[type=file]")
+  .setInputFiles(".local/qa/transparent-avatar.png");
+await page.getByRole("button", { name: "确认取景" }).click();
+await page.waitForTimeout(350);
+await page.locator(".render-indicator").waitFor({ state: "hidden" });
+const center = await page
+  .getByAltText("收款卡实时预览")
+  .evaluate(async (el) => {
+    const im = new Image();
+    im.src = el.src;
+    await im.decode();
+    const c = document.createElement("canvas");
+    c.width = im.width;
+    c.height = im.height;
+    const ctx = c.getContext("2d");
+    ctx.drawImage(im, 0, 0);
+    return Array.from(ctx.getImageData(1024, 1381, 1, 1).data);
+  });
+assert.deepEqual(
+  center,
+  [255, 255, 255, 255],
+  "transparent avatar must preserve the PSD white cover",
 );
 await page.getByRole("button", { name: "微信", exact: true }).click();
 await page.screenshot({ path: ".local/qa/styles.png", fullPage: true });
@@ -221,6 +271,7 @@ writeFileSync(
         "invalid style blocks download",
         "invalid template rejected server-side",
         "asset upload, rename and unused deletion",
+        "transparent reward avatar retains fixed PSD white cover",
       ],
       browserErrors: errors,
     },
