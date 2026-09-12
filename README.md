@@ -16,7 +16,7 @@ npm run admin:setup
 npm run dev
 ```
 
-打开 `http://localhost:3000`；管理员入口 `http://localhost:3000/admin`。随机管理员密码保存在 `.local/admin-access.txt`，散列保存在 `.env.local`。脚本不会覆盖已存在的管理员配置。收款截图和前台上传的图片不上传服务器、不保存到 localStorage；关闭或刷新页面会丢失当前编辑，浏览器会在支持时提示。
+打开 `http://localhost:8982`；管理员入口 `http://localhost:8982/admin`。随机管理员密码保存在 `.local/admin-access.txt`，散列保存在 `.env.local`。脚本不会覆盖已存在的管理员配置。收款截图和前台上传的图片不上传服务器、不保存到 localStorage；关闭或刷新页面会丢失当前编辑，浏览器会在支持时提示。
 
 第一版的 PSD 提取脚本专门映射已确认的模板结构，**不支持任意 PSD 自动转换**。仓库不包含私人模板和字体；首次运行需要提供授权素材。缺少素材时前台显示暂无模板，不会用虚构模板代替。`data/seed.json` 仅在空数据库初始化时导入，之后模板编辑、发布和历史恢复在后台完成。重新提取素材不会改写历史版本数据库。
 

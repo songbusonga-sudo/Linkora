@@ -11,7 +11,7 @@ const context = await browser.newContext({
 const page = await context.newPage(),
   errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
-await page.goto("http://localhost:3000");
+await page.goto("http://localhost:8982");
 await page.getByAltText("收款卡实时预览").waitFor();
 await page.waitForTimeout(700);
 await page.screenshot({ path: ".local/qa/desktop.png", fullPage: true });
@@ -168,7 +168,7 @@ await download.saveAs(".local/qa/export.png");
 await page.screenshot({ path: ".local/qa/completed.png", fullPage: true });
 const mobile = await context.newPage();
 await mobile.setViewportSize({ width: 390, height: 844 });
-await mobile.goto("http://localhost:3000");
+await mobile.goto("http://localhost:8982");
 await mobile.getByAltText("收款卡实时预览").waitFor();
 await mobile.screenshot({ path: ".local/qa/mobile.png", fullPage: true });
 assert.equal(
@@ -179,10 +179,10 @@ assert.equal(
 );
 const admin = await context.newPage();
 const unauthorized = await context.request.get(
-  "http://localhost:3000/api/admin",
+  "http://localhost:8982/api/admin",
 );
 assert.equal(unauthorized.status(), 401);
-await admin.goto("http://localhost:3000/admin");
+await admin.goto("http://localhost:8982/admin");
 const password = readFileSync(".local/admin-access.txt", "utf8").match(
   /Password: (.+)/,
 )[1];
@@ -190,18 +190,18 @@ await admin.getByLabel("管理员密码").fill(password);
 await admin.getByRole("button", { name: "进入工作台" }).click();
 await admin.getByRole("button", { name: "保存草稿" }).waitFor();
 await admin.screenshot({ path: ".local/qa/admin.png", fullPage: true });
-const denied = await context.request.post("http://localhost:3000/api/admin", {
+const denied = await context.request.post("http://localhost:8982/api/admin", {
   data: { action: "copy", id: "starlight" },
   headers: { Origin: "https://invalid.example" },
 });
 assert.equal(denied.status(), 403);
 const current = await context.request
-  .get("http://localhost:3000/api/admin")
+  .get("http://localhost:8982/api/admin")
   .then((r) => r.json());
 const bad = structuredClone(current.templates[0].draft);
 bad.nodes.find((n) => n.role === "reward").styleEditable = true;
-const invalid = await context.request.post("http://localhost:3000/api/admin", {
-  headers: { Origin: "http://localhost:3000" },
+const invalid = await context.request.post("http://localhost:8982/api/admin", {
+  headers: { Origin: "http://localhost:8982" },
   data: {
     action: "save",
     id: bad.id,
@@ -210,8 +210,8 @@ const invalid = await context.request.post("http://localhost:3000/api/admin", {
   },
 });
 assert.equal(invalid.status(), 400);
-const upload = await context.request.post("http://localhost:3000/api/assets", {
-  headers: { Origin: "http://localhost:3000" },
+const upload = await context.request.post("http://localhost:8982/api/assets", {
+  headers: { Origin: "http://localhost:8982" },
   multipart: {
     file: {
       name: "qa-temporary.png",
@@ -225,21 +225,21 @@ const upload = await context.request.post("http://localhost:3000/api/assets", {
 assert.equal(upload.status(), 200);
 const assetId = (await upload.json()).id;
 const renamed = await context.request.patch(
-  "http://localhost:3000/api/assets",
+  "http://localhost:8982/api/assets",
   {
-    headers: { Origin: "http://localhost:3000" },
+    headers: { Origin: "http://localhost:8982" },
     data: { id: assetId, name: "qa-renamed", distributable: false },
   },
 );
 assert.equal(renamed.status(), 200);
 const removed = await context.request.delete(
-  "http://localhost:3000/api/assets",
-  { headers: { Origin: "http://localhost:3000" }, data: { id: assetId } },
+  "http://localhost:8982/api/assets",
+  { headers: { Origin: "http://localhost:8982" }, data: { id: assetId } },
 );
 assert.equal(removed.status(), 200);
 assert.equal(
   (
-    await context.request.get("http://localhost:3000/api/assets/" + assetId)
+    await context.request.get("http://localhost:8982/api/assets/" + assetId)
   ).status(),
   404,
 );
