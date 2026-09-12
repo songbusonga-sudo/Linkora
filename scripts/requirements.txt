@@ -1,0 +1,5 @@
+psd-tools==1.19.0
+Pillow==12.3.0
+numpy>=2.2,<3
+scipy>=1.15,<2
+aggdraw==1.4.1

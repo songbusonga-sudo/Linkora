@@ -1,0 +1,12 @@
+{
+  "url": "https://github.com/ciaochaos/qrbtf",
+  "archive_sha256": "9d2f7b22d2cbf88e1694fb0c0093cbaa67931e87009d592432ab483a8e89846c",
+  "files": {
+    "constants.ts": "24e14db7c43460ba0a35afca2fdedc717eeb021bd6b351672f63c3cfb7419d8b",
+    "encoder.ts": "bc844a95853361c347d1eb8254c0fb462d4a1b8f4565923ff4f740594b1a7af4",
+    "qrcodes\\a1.tsx": "6e545b131e1465fae1c10cfe6d4aa604c1be403bbd48c20e759388cbca82f09f",
+    "qrcodes\\a1_config.ts": "8b250df784f7cf7a66aca5882508ac1415cec48005f368142be2d11f230a4096",
+    "qrcodes\\a2.tsx": "bf8b2e42f5085e0d17cc6aac969d504188fb75344015176a0e3385b26ad39d83",
+    "qrcodes\\a2_config.ts": "36b8d905ba07ff36d362fe7919d0f480d2298343a7d9fde3f1a9556d0da31569"
+  }
+}
