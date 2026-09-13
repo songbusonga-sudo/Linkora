@@ -1,4 +1,5 @@
 export interface QrbtfRendererCommonProps {
+  quietModules?: number;
   correct_level: "low" | "medium" | "quartile" | "high";
 }
 export type RendererProps<T> = T & { url: string };

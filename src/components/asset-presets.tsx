@@ -16,6 +16,8 @@ export default function AssetPresets({
         <button
           key={a.id}
           className={value === a.src ? "active" : ""}
+          aria-pressed={value === a.src}
+          aria-label={a.name}
           onClick={() => onChange(a.src)}
           title={a.name}
         >

@@ -22,7 +22,9 @@ export async function GET(
   return new Response(await readFile(row.path as string), {
     headers: {
       "Content-Type": row.mime as string,
-      "Cache-Control": "private, max-age=3600",
+      "Cache-Control": publicAsset
+        ? "public, max-age=31536000, immutable"
+        : "private, max-age=3600",
       "X-Content-Type-Options": "nosniff",
     },
   });

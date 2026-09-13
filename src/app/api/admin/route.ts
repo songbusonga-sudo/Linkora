@@ -4,6 +4,8 @@ import { readFileSync, existsSync } from "node:fs";
 import { isAdmin, sameOrigin } from "@/lib/auth";
 import { db, publish, saveDraft, snapshot } from "@/lib/db";
 import { templateSchema, Template, validateTemplate } from "@/lib/model";
+import { editableFooter } from "@/lib/template-upgrades";
+import { upgradeCodePlacement, assertFixedFrames } from "@/lib/code-placement";
 export const dynamic = "force-dynamic";
 function checkAssets(t: Template) {
   const sources = new Set<string>();
@@ -28,6 +30,9 @@ function checkAssets(t: Template) {
     t.font,
     ...t.nodes.map((n) => n.src),
     ...t.assets.map((a) => a.src),
+    ...Object.values(t.defaults?.edits.images ?? {}).filter(Boolean),
+    ...Object.keys(t.defaults?.edits.backgroundTransforms ?? {}),
+    ...Object.values(t.defaults?.codes ?? {}).flatMap((c) => c ? [c.image] : []),
   ])
     if (!sources.has(src)) throw Error("模板引用了未登记素材");
 }
@@ -40,8 +45,11 @@ export async function GET() {
       .all()
       .map((r) => ({
         ...r,
+        publishedCover: r.published
+          ? snapshot(r.id as string, Number(r.published))?.cover ?? null
+          : null,
         draft: (() => {
-          const t = JSON.parse(r.draft as string);
+          const t = upgradeCodePlacement(editableFooter(JSON.parse(r.draft as string)));
           t.nodes = t.nodes.map((n: Template["nodes"][number]) => ({
             ...n,
             originalText: n.originalText ?? n.defaultText,
@@ -55,7 +63,7 @@ export async function GET() {
       )
       .all(),
     assets: db
-      .prepare("SELECT id,name,src,category,distributable FROM assets")
+      .prepare("SELECT id,name,src,category,distributable FROM assets WHERE category <> 'cover'")
       .all(),
     layers: existsSync("public/private-assets/layers.json")
       ? JSON.parse(readFileSync("public/private-assets/layers.json", "utf8"))
@@ -74,6 +82,9 @@ export async function POST(req: Request) {
     const body = await req.json();
     if (body.action === "save") {
       const t = validateTemplate(templateSchema.parse(body.template));
+      const previous = db.prepare("SELECT draft FROM templates WHERE id=?").get(t.id);
+      if (!previous) throw Error("模板不存在");
+      assertFixedFrames(JSON.parse(previous.draft as string), t);
       checkAssets(t);
       saveDraft(t, body.revision);
     } else if (body.action === "publish") {

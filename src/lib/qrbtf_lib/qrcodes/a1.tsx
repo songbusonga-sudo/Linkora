@@ -216,9 +216,9 @@ function QrbtfRendererA1(props: RendererProps<QrbtfRendererA1Props>) {
     typeTable,
   ]);
 
-  const viewBox = `${-table.length / 5} ${-table.length / 5} ${
-    (7 * table.length) / 5
-  } ${(7 * table.length) / 5}`;
+  const padding = props.quietModules ?? table.length / 5;
+  const side = table.length + padding * 2;
+  const viewBox = `${-padding} ${-padding} ${side} ${side}`;
 
   return (
     <svg

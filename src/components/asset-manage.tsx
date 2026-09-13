@@ -4,12 +4,16 @@ export default function AssetManage({
   id,
   name,
   distributable,
+  currentTemplateId,
+  linkedToCurrentTemplate,
   onDone,
   onError,
 }: {
   id: string;
   name: string;
   distributable: boolean;
+  currentTemplateId: string;
+  linkedToCurrentTemplate: boolean;
   onDone: () => Promise<void>;
   onError: (message: string) => void;
 }) {
@@ -22,12 +26,18 @@ export default function AssetManage({
       const r = await fetch("/api/assets", {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, name: label, distributable: rights }),
+        body: JSON.stringify({
+          id,
+          name: label,
+          distributable: rights,
+          currentTemplateId,
+          linkedToCurrentTemplate,
+        }),
       });
       const d = await r.json();
       if (!r.ok) throw Error(d.error);
       await onDone();
-      onError(method === "PATCH" ? "素材信息已保存" : "未被引用的素材已删除");
+      onError(method === "PATCH" ? "素材信息已保存" : "素材已删除");
     } catch (e) {
       onError((e as Error).message);
     } finally {
@@ -60,10 +70,10 @@ export default function AssetManage({
         </button>
         <button
           className="text-button"
-          disabled={busy}
+          disabled={busy || linkedToCurrentTemplate}
           onClick={() => mutate("DELETE")}
         >
-          删除未引用素材
+          删除素材
         </button>
       </div>
     </div>

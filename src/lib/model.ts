@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { validateCodePlacement } from "./code-placement";
 export const roleSchema = z.enum([
   "image",
   "background",
@@ -43,6 +44,9 @@ export const nodeSchema = z.object({
   sizeEditable: z.boolean(),
   defaultText: z.string().max(200),
   originalText: z.string().max(200).optional(),
+  fixedDashes: z.boolean().optional(),
+  strokeOnly: z.boolean().optional(),
+  clipTo: z.string().optional(),
   maxLength: z.number().int().min(1).max(200),
   fontSize: z.number().min(8).max(300),
   color: z.string().regex(/^#[0-9a-f]{6}$/i),
@@ -51,6 +55,7 @@ const optionSchema = z.object({
   id: z.string(),
   name: z.string().min(1).max(100),
   defaultId: z.string(),
+  replacementNodeId: z.string().optional(),
   choices: z
     .array(
       z.object({
@@ -61,6 +66,71 @@ const optionSchema = z.object({
     )
     .min(1),
 });
+const storedImage = z
+  .string()
+  .regex(/^\/(private-assets\/[\w.-]+|api\/assets\/[\w.-]+)$/);
+const cropSchema = z.object({
+  x: z.number().nonnegative(),
+  y: z.number().nonnegative(),
+  size: z.number().positive(),
+});
+export const qrStyleSchema = z.object({
+  preset: z.string().max(32),
+  series: z.enum(["A1", "A2"]),
+  correct_level: z.enum(["low", "medium", "quartile", "high"]),
+  positioning_point_type: z.enum(["square", "circle", "planet", "rounded"]),
+  positioning_point_color: z.string().regex(/^#[0-9a-f]{6}$/i),
+  content_point_type: z.enum(["square", "circle"]),
+  content_line_type: z.enum([
+    "horizontal",
+    "vertical",
+    "interlock",
+    "radial",
+    "tl-br",
+    "tr-bl",
+    "cross",
+  ]),
+  content_point_scale: z.number().min(0).max(1),
+  content_point_opacity: z.number().min(0).max(1),
+  content_point_color: z.string().regex(/^#[0-9a-f]{6}$/i),
+});
+const defaultCodeSchema = z.object({
+  image: storedImage,
+  content: z.string().max(8192).optional(),
+  crop: cropSchema.optional(),
+  defaultCrop: cropSchema.optional(),
+  confirmed: z.boolean(),
+  name: z.string().max(200),
+});
+export const backgroundTransformSchema = z.object({
+  scale: z.number().min(0.25).finite(),
+  x: z.number().finite(),
+  y: z.number().finite(),
+  rotation: z.number().min(-180).max(180).optional(),
+});
+export type BackgroundTransform = z.infer<typeof backgroundTransformSchema>;
+export const defaultsSchema = z.object({
+  edits: z.object({
+    images: z.record(z.union([storedImage, z.literal("")])),
+    texts: z.record(z.string().max(200)),
+    colors: z.record(z.string().regex(/^#[0-9a-f]{6}$/i)),
+    choices: z.record(z.string()),
+    codeColors: z.object({
+      frame: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+      ink: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+    }).optional(),
+    rewardAvatarOpacity: z.number().min(0).max(1).optional(),
+    backgroundY: z.number().min(0).max(100),
+    backgroundTransforms: z.record(storedImage, backgroundTransformSchema).optional(),
+  }),
+  codes: z.object({
+    wechat: defaultCodeSchema.optional(),
+    alipay: defaultCodeSchema.optional(),
+    reward: defaultCodeSchema.optional(),
+  }),
+  styles: z.object({ wechat: qrStyleSchema, alipay: qrStyleSchema }),
+});
+export type TemplateDefaults = z.infer<typeof defaultsSchema>;
 export const templateSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/),
   name: z.string().min(1).max(80),
@@ -74,8 +144,24 @@ export const templateSchema = z.object({
   assets: z.array(assetSchema).max(500),
   verified: z.boolean(),
   version: z.number().int().positive(),
+  colorDefaultsVersion: z.literal(1).optional(),
+  rewardLayersVersion: z.literal(1).optional(),
+  rewardColorVersion: z.literal(1).optional(),
+  rewardIconColorVersion: z.literal(1).optional(),
+  codePlacementVersion: z.literal(1).optional(),
+  defaults: defaultsSchema.optional(),
 });
 export type Template = z.infer<typeof templateSchema>;
+export function selectedChoice(
+  option: Template["options"][number],
+  value?: string,
+) {
+  return (
+    option.choices.find((choice) => choice.id === value) ??
+    option.choices.find((choice) => choice.id === option.defaultId) ??
+    option.choices[0]
+  );
+}
 export type TemplateNode = z.infer<typeof nodeSchema>;
 export type Asset = z.infer<typeof assetSchema>;
 export type CodeKind = "wechat" | "alipay" | "reward";
@@ -112,7 +198,10 @@ export type Edits = {
   texts: Record<string, string>;
   colors: Record<string, string>;
   choices: Record<string, string>;
+  codeColors?: { frame?: string; ink?: string };
+  rewardAvatarOpacity?: number;
   backgroundY: number;
+  backgroundTransforms?: Record<string, BackgroundTransform>;
 };
 export const emptyEdits = (): Edits => ({
   images: {},
@@ -132,28 +221,33 @@ export function ready(codes: Partial<Record<CodeKind, CodeInput>>) {
   );
 }
 export function validateTemplate(t: Template) {
+  validateCodePlacement(t);
   const ids = new Set(t.nodes.map((n) => n.id));
   if (ids.size !== t.nodes.length) throw Error("图层标识不能重复");
+  for (const role of ["wechat", "alipay", "reward"])
+    if (t.nodes.filter((n) => n.role === role).length !== 1)
+      throw Error(`模板必须有且仅有一个 ${role} 区域`);
   for (const role of [
-    "wechat",
-    "alipay",
-    "reward",
     "avatar",
     "background",
     "signature",
     "rewardAvatar",
     "rewardIcon",
   ])
-    if (t.nodes.filter((n) => n.role === role).length !== 1)
-      throw Error(`模板必须有且仅有一个 ${role} 区域`);
+    if (t.nodes.filter((n) => n.role === role).length > 1)
+      throw Error(`模板最多只能有一个 ${role} 区域`);
   for (const n of t.nodes) {
+    if (n.clipTo && (!ids.has(n.clipTo) || n.clipTo === n.id))
+      throw Error("图层裁切区域无效");
     if (Array.from(n.defaultText).length > n.maxLength)
       throw Error("默认文案超出字数上限");
     if (
       ["wechat", "alipay", "reward"].includes(n.role) &&
-      (!n.visible || n.colorEditable)
+      !n.visible
     )
-      throw Error("必填码必须显示，原码不允许整体颜色覆盖");
+      throw Error("必填码必须显示");
+    if (["wechat", "alipay"].includes(n.role) && n.colorEditable)
+      throw Error("微信和支付宝原码不允许整体颜色覆盖");
     if (n.positionEditable || n.sizeEditable)
       throw Error("第一版模板固定位置及尺寸，不向前台开放移动");
     if (n.role === "reward" && n.styleEditable)
@@ -167,6 +261,15 @@ export function validateTemplate(t: Template) {
   if (new Set(t.options.map((o) => o.id)).size !== t.options.length)
     throw Error("选项组标识不能重复");
   for (const o of t.options) {
+    if (
+      o.replacementNodeId &&
+      !t.nodes.some(
+        (n) =>
+          n.id === o.replacementNodeId &&
+          ["rewardAvatar", "rewardIcon"].includes(n.role),
+      )
+    )
+      throw Error("预设替换区域无效");
     if (new Set(o.choices.map((c) => c.id)).size !== o.choices.length)
       throw Error("菜单项标识不能重复");
     if (!o.choices.some((c) => c.id === o.defaultId))

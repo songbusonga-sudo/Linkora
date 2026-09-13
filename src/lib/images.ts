@@ -7,10 +7,40 @@ import {
   BarcodeFormat,
 } from "@zxing/library";
 import type { Crop } from "./model";
+import { detectRewardCrop } from "./reward-crop";
+
+// Template records are persisted in the production database, so keep their
+// original asset paths stable while transparently serving a smaller rendition.
+export function optimizedImageSource(src: string) {
+  if (src === "/private-assets/layer-0.png")
+    return "/private-assets/layer-0.webp";
+  if (src === "/private-assets/original.png")
+    return "/private-assets/template-preview.webp";
+  return src;
+}
+
+export async function autoCropReward(src: string): Promise<Crop> {
+  const im = await loadImage(src);
+  const scale = Math.min(1, 720 / Math.max(im.width, im.height));
+  const c = makeCanvas(im.width * scale, im.height * scale);
+  const ctx = c.getContext("2d", { willReadFrequently: true })!;
+  ctx.drawImage(im, 0, 0, c.width, c.height);
+  const crop = detectRewardCrop(
+    ctx.getImageData(0, 0, c.width, c.height).data,
+    c.width,
+    c.height,
+  );
+  const size = Math.min(im.width, im.height, crop.size / scale);
+  return {
+    x: Math.max(0, Math.min(im.width - size, crop.x / scale)),
+    y: Math.max(0, Math.min(im.height - size, crop.y / scale)),
+    size,
+  };
+}
 export async function loadImage(src: string): Promise<HTMLImageElement> {
   const im = new Image();
   im.decoding = "async";
-  im.src = src;
+  im.src = optimizedImageSource(src);
   await im.decode();
   return im;
 }

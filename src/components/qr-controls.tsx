@@ -1,30 +1,36 @@
 "use client";
 import { QRStyle } from "@/lib/model";
-import { presetStyle } from "@/lib/qr";
-import ColorField from "./color-field";
+import { restyleQR } from "@/lib/qr";
 import { Reset } from "./shared";
 export default function QRControls({
   style,
+  defaultStyle,
   onChange,
-  preview,
 }: {
   style: QRStyle;
+  defaultStyle: QRStyle;
   onChange: (s: QRStyle) => void;
-  preview?: string;
 }) {
-  const update = (p: Partial<QRStyle>) => onChange({ ...style, ...p });
+  const currentStyle =
+    style.preset === "a2c" ? restyleQR(style, "a2") : style;
+  const savedDefaultStyle =
+    defaultStyle.preset === "a2c"
+      ? restyleQR(defaultStyle, "a2")
+      : defaultStyle;
+  const update = (p: Partial<QRStyle>) =>
+    onChange({ ...currentStyle, ...p });
   return (
     <div className="qr-controls">
       <div className="field-heading">
         <label>样式系列</label>
-        <Reset onClick={() => onChange(presetStyle())} />
+        <Reset onClick={() => onChange({ ...savedDefaultStyle })} />
       </div>
       <div className="segmented">
         {(["A1", "A2"] as const).map((s) => (
           <button
             key={s}
-            className={style.series === s ? "active" : ""}
-            onClick={() => onChange(presetStyle(s.toLowerCase()))}
+            className={currentStyle.series === s ? "active" : ""}
+            onClick={() => onChange(restyleQR(currentStyle, s.toLowerCase()))}
           >
             {s} <span>{s === "A1" ? "点阵" : "线条"}</span>
           </button>
@@ -34,10 +40,10 @@ export default function QRControls({
         <label>
           预设
           <select
-            value={style.preset}
-            onChange={(e) => onChange(presetStyle(e.target.value))}
+            value={currentStyle.preset}
+            onChange={(e) => onChange(restyleQR(currentStyle, e.target.value))}
           >
-            {(style.series === "A1" ? ["a1", "a1c", "a1p"] : ["a2", "a2c"]).map(
+            {(currentStyle.series === "A1" ? ["a1", "a1c", "a1p"] : ["a2"]).map(
               (p) => (
                 <option key={p} value={p}>
                   {p.toUpperCase()}
@@ -49,7 +55,7 @@ export default function QRControls({
         <label>
           纠错等级
           <select
-            value={style.correct_level}
+              value={currentStyle.correct_level}
             onChange={(e) =>
               update({
                 correct_level: e.target.value as QRStyle["correct_level"],
@@ -73,7 +79,7 @@ export default function QRControls({
         <label>
           定位点类型
           <select
-            value={style.positioning_point_type}
+              value={currentStyle.positioning_point_type}
             onChange={(e) =>
               update({
                 positioning_point_type: e.target
@@ -93,11 +99,11 @@ export default function QRControls({
             ))}
           </select>
         </label>
-        {style.series === "A1" ? (
+        {currentStyle.series === "A1" ? (
           <label>
             信息点形状
             <select
-              value={style.content_point_type}
+              value={currentStyle.content_point_type}
               onChange={(e) =>
                 update({
                   content_point_type: e.target
@@ -113,7 +119,7 @@ export default function QRControls({
           <label>
             线条排列
             <select
-              value={style.content_line_type}
+              value={currentStyle.content_line_type}
               onChange={(e) =>
                 update({
                   content_line_type: e.target
@@ -142,8 +148,8 @@ export default function QRControls({
         (key) => (
           <label className="range-field" key={key}>
             <span>
-              {key === "content_point_scale" ? "信息点 / 线条缩放" : "不透明度"}
-              <small>{Math.round(style[key] * 100)}%</small>
+              {key === "content_point_scale" ? "信息点 / 线条粗细" : "不透明度"}
+              <small>{Math.round(currentStyle[key] * 100)}%</small>
             </span>
             <input
               type="range"
@@ -153,26 +159,12 @@ export default function QRControls({
               min="0"
               max="1"
               step="0.01"
-              value={style[key]}
+              value={currentStyle[key]}
               onChange={(e) => update({ [key]: Number(e.target.value) })}
             />
           </label>
         ),
       )}
-      <ColorField
-        label="定位点颜色"
-        value={style.positioning_point_color}
-        onChange={(v) => update({ positioning_point_color: v })}
-        onReset={() => update({ positioning_point_color: "#000000" })}
-        preview={preview}
-      />
-      <ColorField
-        label="信息点颜色"
-        value={style.content_point_color}
-        onChange={(v) => update({ content_point_color: v })}
-        onReset={() => update({ content_point_color: "#000000" })}
-        preview={preview}
-      />
     </div>
   );
 }

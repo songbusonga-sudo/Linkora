@@ -1,0 +1,73 @@
+import { chromium, expect } from '@playwright/test';
+import assert from 'node:assert/strict';
+import { readFileSync, mkdirSync } from 'node:fs';
+mkdirSync('.local/qa', { recursive: true });
+const browser = await chromium.launch({ channel: 'chrome', headless: true });
+try {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
+  const page = await context.newPage(), errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto('http://localhost:8982/admin');
+  await page.getByLabel('管理员密码').fill(readFileSync('.local/admin-access.txt', 'utf8').match(/^Password: (.+)$/m)[1]);
+  await page.getByRole('button', { name: '进入工作台', exact: true }).click();
+  await page.getByRole('button', { name: '保存草稿', exact: true }).waitFor();
+  const before = await page.request.get('http://localhost:8982/api/admin').then(r => r.json());
+  const state = structuredClone(before), row = state.templates[0];
+  const avatar = row.draft.nodes.find(n => n.role === 'avatar');
+  assert.ok(avatar, 'fixture contains the main avatar');
+  // Exercise the UI save/reload flow against an in-memory draft; never change the user's template.
+  await page.route('**/api/admin', async route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: state });
+    const body = route.request().postDataJSON();
+    assert.equal(body.action, 'save');
+    assert.equal(body.revision, row.revision);
+    row.draft = body.template; row.revision++;
+    await route.fulfill({ json: { ok: true } });
+  });
+  async function openAvatar() {
+    await page.getByRole('button', { name: '图层与权限', exact: true }).click();
+    await page.getByRole('button', { name: 'PSD 根目录', exact: true }).click();
+    await page.locator('.psd-folders').getByRole('button', { name: '头像', exact: true }).click();
+  }
+  await openAvatar();
+  const del = page.getByRole('button', { name: '删除图层', exact: true });
+  await expect(del).toBeEnabled();
+  await page.getByRole('img', { name: '图层位置实时预览' }).waitFor();
+  await page.screenshot({ path: '.local/qa/layer-delete-button.png' });
+  await del.click();
+  await expect(page.locator('.layer-list button')).toHaveCount(0);
+  await expect(page.getByText('此文件夹暂无已导入素材，可打开子文件夹或导入图层。')).toBeVisible();
+  await page.getByRole('button', { name: '撤销删除', exact: true }).click();
+  await expect(del).toBeEnabled();
+  await expect(page.locator('.layer-list button')).toHaveCount(1);
+  await del.click();
+  await page.getByRole('button', { name: '预览', exact: true }).click();
+  await expect(page.getByAltText('模板草稿预览')).toBeVisible();
+  await page.screenshot({ path: '.local/qa/layer-deleted-preview.png' });
+  await page.getByRole('button', { name: '关闭预览 ×', exact: true }).click();
+  await page.getByRole('button', { name: '保存草稿', exact: true }).click();
+  await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible();
+  assert.equal(row.draft.nodes.some(n => n.id === avatar.id), false);
+  await page.reload();
+  await page.getByRole('button', { name: '保存草稿', exact: true }).waitFor();
+  await openAvatar();
+  await expect(page.locator('.layer-list button')).toHaveCount(0);
+  await page.getByRole('button', { name: 'PSD 根目录', exact: true }).click();
+  await page.locator('.psd-folders').getByRole('button', { name: '微信', exact: true }).click();
+  await page.locator('.layer-list button').filter({ has: page.locator('.layer-number', { hasText: /^5-1$/ }) }).click();
+  await expect(del).toBeDisabled();
+  const studio = await context.newPage();
+  studio.on('pageerror', e => errors.push(e.message));
+  await studio.route('**/api/templates', route => route.fulfill({ json: [row.draft] }));
+  await studio.goto('http://localhost:8982');
+  await expect(studio.getByRole('img', { name: '收款卡实时预览', exact: true })).toHaveAttribute('data-revision', /\d+/);
+  await studio.locator('.studio-options summary').click();
+  await expect(studio.getByText('主头像', { exact: true })).toHaveCount(0);
+  await studio.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await studio.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  const after = await page.request.get('http://localhost:8982/api/admin').then(r => r.json());
+  assert.deepEqual(after.templates, before.templates);
+  assert.deepEqual(errors, []);
+  await page.request.delete('http://localhost:8982/api/auth', { headers: { Origin: 'http://localhost:8982' } });
+  console.log('Layer deletion QA passed: delete avatar, undo, preview, save/reload, frontend without avatar, required code protection; saved user templates unchanged.');
+} finally { await browser.close(); }

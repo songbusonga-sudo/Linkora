@@ -30,18 +30,28 @@ export async function DELETE(req: Request) {
   if (!(await isAdmin()) || !sameOrigin(req))
     return new Response(null, { status: 403 });
   try {
-    const { id } = await req.json();
+    const { id, currentTemplateId, linkedToCurrentTemplate } = await req.json();
     if (typeof id !== "string") throw Error("素材标识无效");
+    if (typeof currentTemplateId !== "string") throw Error("请选择当前模板");
+    if (linkedToCurrentTemplate !== false)
+      throw Error("素材仍关联到当前模板，请先取消勾选后再删除");
     const row = db.prepare("SELECT src,path FROM assets WHERE id=?").get(id);
     if (!row) throw Error("素材不存在");
-    const src = row.src as string;
-    const used = db
-      .prepare(
-        "SELECT draft AS data FROM templates UNION ALL SELECT snapshot AS data FROM versions",
-      )
-      .all()
-      .some((r) => (r.data as string).includes(src));
-    if (used) throw Error("素材仍被草稿或历史版本引用，不能删除");
+    const template = db
+      .prepare("SELECT draft FROM templates WHERE id=?")
+      .get(currentTemplateId);
+    if (!template) throw Error("当前模板不存在");
+    // The current checkbox is the source of truth. Historical published
+    // snapshots remain immutable and must never block asset housekeeping.
+    const draft = JSON.parse(template.draft as string) as {
+      assets?: { id: string }[];
+    };
+    if (draft.assets?.some((asset) => asset.id === id)) {
+      draft.assets = draft.assets.filter((asset) => asset.id !== id);
+      db.prepare(
+        "UPDATE templates SET draft=?,revision=revision+1 WHERE id=?",
+      ).run(JSON.stringify(draft), currentTemplateId);
+    }
     await unlink(row.path as string);
     db.prepare("DELETE FROM assets WHERE id=?").run(id);
     return NextResponse.json({ ok: true });
@@ -69,6 +79,7 @@ export async function POST(req: Request) {
         "rewardIcon",
         "decoration",
         "font",
+        "cover",
       ].includes(category)
     )
       throw Error("素材分类无效");

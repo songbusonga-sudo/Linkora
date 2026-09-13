@@ -12,18 +12,19 @@ const page = await context.newPage(),
   errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 await page.goto("http://localhost:8982");
-await page.getByAltText("收款卡实时预览").waitFor();
+await page.getByRole("img", { name: "收款卡实时预览", exact: true }).waitFor();
 await page.waitForTimeout(700);
 await page.screenshot({ path: ".local/qa/desktop.png", fullPage: true });
+assert.equal(await page.locator(".code-upload input[type=file]").count(), 3);
+assert.equal(await page.locator(".steps").count(), 0);
 assert.equal(
-  await page.getByRole("button", { name: "内容与样式" }).isDisabled(),
-  true,
+  await page.getByRole("button", { name: "下载高清 PNG" }).isDisabled(),
+  false,
 );
-await page.getByRole("button", { name: "使用这个模板" }).click();
-assert.equal(
-  await page.getByRole("button", { name: "下一步" }).isDisabled(),
-  true,
-);
+const previewBounds = await page.locator(".preview-panel").boundingBox();
+const settingsBounds = await page.locator(".settings-panel").boundingBox();
+assert.ok(previewBounds.x + previewBounds.width <= settingsBounds.x);
+assert.equal(await page.locator(".preview-panel button").count(), 0);
 for (const [i, payload] of [
   "wxp://linkora-test-only",
   "https://qr.alipay.com/linkora-test-only",
@@ -58,8 +59,8 @@ for (const [i, payload] of [
     .waitFor();
 }
 assert.equal(
-  await page.getByRole("button", { name: "下一步" }).isDisabled(),
-  true,
+  await page.getByRole("button", { name: "下载高清 PNG" }).isDisabled(),
+  false,
 );
 const rewardPng = await page.evaluate(async () => {
   const im = new Image();
@@ -80,10 +81,9 @@ await page
   .nth(2)
   .locator("input[type=file]")
   .setInputFiles(".local/qa/reward-fixture.png");
-await page.getByRole("dialog").waitFor();
-await page.getByRole("slider", { name: "取景范围", exact: true }).press("End");
-await page.getByRole("button", { name: "确认取景" }).click();
-await page.getByRole("button", { name: "下一步" }).click();
+await page.getByText("已自动裁剪 · 模板尺寸", { exact: true }).waitFor();
+assert.equal(await page.getByRole("dialog").count(), 0);
+await page.locator(".studio-options summary").click();
 await page
   .getByRole("textbox", { name: "署名", exact: true })
   .fill("测试署名一二三四五六七八九十");
@@ -92,7 +92,40 @@ assert.ok(
     await page.getByRole("textbox", { name: "署名", exact: true }).inputValue(),
   ).length <= 12,
 );
-await page.getByRole("button", { name: "赞赏码", exact: true }).click();
+const liveTiming = await page.evaluate(async () => {
+  const input = document.querySelector('input[aria-label="署名"]');
+  const canvas = document.querySelector('canvas[aria-label="收款卡实时预览"]');
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  ).set;
+  const timings = [];
+  for (let i = 0; i < 8; i++) {
+    const before = canvas.dataset.revision;
+    const start = performance.now();
+    setter.call(input, "实时更新" + i);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    while (
+      canvas.dataset.revision === before &&
+      performance.now() - start < 2000
+    ) {
+      await new Promise(requestAnimationFrame);
+    }
+    if (canvas.dataset.revision === before)
+      throw Error("Preview failed to update");
+    timings.push(performance.now() - start);
+  }
+  return timings;
+});
+console.log("Text input to canvas update (ms):", liveTiming.map(Math.round));
+assert.ok(
+  liveTiming.slice(1).every((ms) => ms < 160),
+  "warm preview must update before the former debounce delay",
+);
+await page.getByRole("button", { name: "放大预览" }).click();
+await page.getByRole("img", { name: "高清成品预览", exact: true }).waitFor();
+await page.getByRole("button", { name: "关闭预览 ×" }).click();
+await page.getByRole("button", { name: "微信赞赏码：更改图层与头像", exact: true }).click();
 const transparent = await page.evaluate(() => {
   const c = document.createElement("canvas");
   c.width = 200;
@@ -104,30 +137,22 @@ writeFileSync(
   Buffer.from(transparent, "base64"),
 );
 await page
-  .locator(".content-controls input[type=file]")
+  .locator("#code-editor-reward .content-controls input[type=file]")
   .setInputFiles(".local/qa/transparent-avatar.png");
 await page.getByRole("button", { name: "确认取景" }).click();
 await page.waitForTimeout(350);
 await page.locator(".render-indicator").waitFor({ state: "hidden" });
 const center = await page
-  .getByAltText("收款卡实时预览")
-  .evaluate(async (el) => {
-    const im = new Image();
-    im.src = el.src;
-    await im.decode();
-    const c = document.createElement("canvas");
-    c.width = im.width;
-    c.height = im.height;
-    const ctx = c.getContext("2d");
-    ctx.drawImage(im, 0, 0);
-    return Array.from(ctx.getImageData(1024, 1381, 1, 1).data);
-  });
+  .getByRole("img", { name: "收款卡实时预览", exact: true })
+  .evaluate((c) =>
+    Array.from(c.getContext("2d").getImageData(1024, 1381, 1, 1).data),
+  );
 assert.deepEqual(
   center,
   [255, 255, 255, 255],
   "transparent avatar must preserve the PSD white cover",
 );
-await page.getByRole("button", { name: "微信", exact: true }).click();
+await page.getByRole("button", { name: "微信收款码：更改码样式", exact: true }).click();
 await page.screenshot({ path: ".local/qa/styles.png", fullPage: true });
 await page.locator(".qr-controls select").nth(0).selectOption("a1p");
 await page.waitForTimeout(400);
@@ -138,38 +163,38 @@ await page.getByRole("slider", { name: "信息点不透明度", exact: true }).f
 await page
   .getByRole("slider", { name: "信息点不透明度", exact: true })
   .press("Home");
-await page.getByRole("button", { name: "下一步" }).click();
-await page.getByRole("button", { name: "开始检查" }).click();
-await page.locator(".toast.error").waitFor();
-assert.equal(
-  await page.getByRole("button", { name: "下载高清 PNG" }).isDisabled(),
-  true,
-);
-await page.getByRole("button", { name: "关闭提示" }).click();
-await page.getByRole("button", { name: "上一步" }).click();
+await page.locator(".render-indicator").waitFor({ state: "hidden" });
+assert.equal(await page.locator(".steps li").count(), 0);
+assert.equal(await page.getByRole("button", { name: "下一步" }).count(), 1);
+assert.equal(await page.getByRole("button", { name: "开始检查" }).count(), 0);
+assert.equal(await page.getByRole("checkbox").count(), 0);
+const styledDownloadPromise = page.waitForEvent("download");
+await page.getByRole("button", { name: "下载高清 PNG" }).click();
+const styledDownload = await styledDownloadPromise;
+assert.equal(await styledDownload.failure(), null);
+await page.getByText("高清图片已下载，感谢每一份心意。").waitFor();
 await page
   .getByRole("button", { name: "恢复模板默认设置", exact: true })
   .click();
-await page.getByRole("button", { name: "下一步" }).click();
-await page.getByRole("button", { name: "开始检查" }).click();
 await page
-  .getByText("美化后与成品识别均已通过", { exact: true })
-  .waitFor({ timeout: 60000 });
-assert.equal(
-  await page.getByRole("button", { name: "下载高清 PNG" }).isDisabled(),
-  true,
-);
-await page.getByRole("checkbox").nth(0).check();
-await page.getByRole("checkbox").nth(1).check();
+  .getByText("高清图片已下载，感谢每一份心意。")
+  .waitFor({ state: "hidden" });
+await page.locator(".render-indicator").waitFor({ state: "hidden" });
 const downloadPromise = page.waitForEvent("download");
 await page.getByRole("button", { name: "下载高清 PNG" }).click();
 const download = await downloadPromise;
 await download.saveAs(".local/qa/export.png");
+const exportedPng = readFileSync(".local/qa/export.png");
+assert.equal(exportedPng.subarray(1, 4).toString(), "PNG");
+assert.equal(exportedPng.readUInt32BE(16), 4096);
+assert.equal(exportedPng.readUInt32BE(20), 4096);
 await page.screenshot({ path: ".local/qa/completed.png", fullPage: true });
 const mobile = await context.newPage();
 await mobile.setViewportSize({ width: 390, height: 844 });
 await mobile.goto("http://localhost:8982");
-await mobile.getByAltText("收款卡实时预览").waitFor();
+await mobile
+  .getByRole("img", { name: "收款卡实时预览", exact: true })
+  .waitFor();
 await mobile.screenshot({ path: ".local/qa/mobile.png", fullPage: true });
 assert.equal(
   await mobile.evaluate(
@@ -258,17 +283,17 @@ writeFileSync(
       passed: true,
       checks: [
         "desktop and mobile rendering",
-        "three-code gating",
+        "optional code uploads",
         "full screenshot decode",
-        "reward crop confirmation",
+        "automatic reward crop without manual resize",
         "signature limit",
         "QR style reset",
-        "styled and exported content verification",
+        "single-page upload and direct download with controls on the right",
         "4096 PNG download",
         "admin authentication",
         "cross-origin mutation rejected",
         "unverified publication blocked",
-        "invalid style blocks download",
+        "low-opacity style downloads without verification blocking",
         "invalid template rejected server-side",
         "asset upload, rename and unused deletion",
         "transparent reward avatar retains fixed PSD white cover",

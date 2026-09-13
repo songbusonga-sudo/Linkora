@@ -11,6 +11,7 @@ Linkora is distributed under GPL-3.0-only. See `LICENSE`.
 - The supplied upstream archive's SHA-256 and original source hashes are recorded in `third_party/qrbtf/upstream.json`. No unverifiable commit hash is asserted.
 - Linkora modifications (2026-09-12): removed upstream site-specific forms and translation dependencies; added small local renderer types; made random point/line generation deterministic per payload; limited SVG root attributes; integrated local decoding, rendering, and export checks. Upstream preset parameter values are preserved.
 - `scripts/vendor-qrbtf.py` documents the extraction and adaptation. Renderer source, preset source, lockfile, build scripts, and these notices are included in source distributions.
+- Linkora additionally supports an explicit four-module SVG quiet zone for administrator-defined QR body placement. Matrix dimensions and quiet-zone geometry are calculated separately; legacy snapshots retain their original SVG padding.
 
 ## Other dependencies
 

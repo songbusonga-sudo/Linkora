@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -18,32 +18,42 @@ import {
   X,
   ArrowUp,
   ArrowDown,
+  Trash2,
+  Undo2,
 } from "lucide-react";
 import { Asset, Template, TemplateNode, emptyEdits } from "@/lib/model";
 import { Header, UploadButton } from "./shared";
 import { drawTemplate } from "@/lib/render";
 import { presetStyle } from "@/lib/qr";
 import AssetManage from "./asset-manage";
+import LayerPosition from "./layer-position";
+import LabelPosition from "./label-position";
+import CodePlacement from "./code-placement";
+import { isCodeFrame } from "@/lib/code-placement";
+import LayerBrowser from "./layer-browser";
+import OptionLayerPicker from "./option-layer-picker";
+import { PsdLayer } from "@/lib/psd-folders";
+import { defaultLayerColor } from "@/lib/layer-colors";
+import { canDeleteLayer, deleteLayer } from "@/lib/layer-delete";
+import { folderForLayer, layersInFolder } from "@/lib/psd-folders";
+import Studio from "./studio";
+import AddTemplateAsset from "./add-template-asset";
+import ColorPicker from "./color-picker";
+import { persistDefaultDisplay } from "@/lib/save-default-display";
+import { createTemplateCover } from "@/lib/template-cover";
+import { formatBeijingTime } from "@/lib/time";
 type Row = {
   id: string;
   draft: Template;
   published: number | null;
+  publishedCover: string | null;
   revision: number;
-};
-type Layer = {
-  id: string;
-  name: string;
-  kind: string;
-  bbox: number[];
-  effectiveVisible: boolean;
-  opacity: number;
-  text?: string;
 };
 type Data = {
   templates: Row[];
   assets: (Omit<Asset, "distributable"> & { distributable: number })[];
   versions: { template_id: string; version: number; created: string }[];
-  layers: Layer[];
+  layers: PsdLayer[];
 };
 const categories = {
   background: "背景",
@@ -53,6 +63,7 @@ const categories = {
   decoration: "装饰",
   font: "字体",
 };
+const versionsPerPage = 5;
 export default function Admin() {
   const [auth, setAuth] = useState<boolean | null>(null),
     [configured, setConfigured] = useState(true),
@@ -62,17 +73,37 @@ export default function Admin() {
     [draft, setDraft] = useState<Template>(),
     [revision, setRevision] = useState(0),
     [section, setSection] = useState<
-      "templates" | "layers" | "options" | "assets" | "versions"
+      | "templates"
+      | "layers"
+      | "labels"
+      | "codes"
+      | "defaults"
+      | "options"
+      | "assets"
+      | "versions"
     >("templates"),
     [nodeId, setNodeId] = useState(""),
     [message, setMessage] = useState(""),
     [busy, setBusy] = useState(false),
     [dirty, setDirty] = useState(false),
+    [deleted, setDeleted] = useState<{
+      template: Template;
+      node: TemplateNode;
+    }>(),
     [preview, setPreview] = useState(""),
     [assetCategory, setAssetCategory] =
       useState<Asset["category"]>("background"),
     [distributable, setDistributable] = useState(false),
-    [showImport, setShowImport] = useState(false);
+    [versionPage, setVersionPage] = useState(0);
+  const [addAsset, setAddAsset] = useState(false);
+  const [layerPreviewTarget, setLayerPreviewTarget] =
+    useState<HTMLDivElement | null>(null);
+  const defaultUploads = useRef(new Map<string, Asset>());
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(""), 3500);
+    return () => window.clearTimeout(timer);
+  }, [message]);
   async function refresh(selectId = id) {
     const r = await fetch("/api/admin");
     if (r.status === 401) {
@@ -88,6 +119,7 @@ export default function Admin() {
       setRevision(row.revision);
       setNodeId(row.draft.nodes[0]?.id ?? "");
       setDirty(false);
+      setDeleted(undefined);
     }
   }
   useEffect(() => {
@@ -110,7 +142,11 @@ export default function Admin() {
     window.addEventListener("beforeunload", stop);
     return () => window.removeEventListener("beforeunload", stop);
   }, [dirty]);
+  useEffect(() => {
+    setVersionPage(0);
+  }, [id, section]);
   const change = (update: Partial<Template>) => {
+    setDeleted(undefined);
     setDraft((d) =>
       d
         ? {
@@ -123,9 +159,41 @@ export default function Admin() {
     setDirty(true);
   };
   const node = draft?.nodes.find((n) => n.id === nodeId);
+  const templateVersions =
+    data?.versions.filter((version) => version.template_id === id) ?? [];
+  const versionPageCount = Math.max(
+    1,
+    Math.ceil(templateVersions.length / versionsPerPage),
+  );
+  const currentVersionPage = Math.min(versionPage, versionPageCount - 1);
+  const visibleVersions = templateVersions.slice(
+    currentVersionPage * versionsPerPage,
+    (currentVersionPage + 1) * versionsPerPage,
+  );
+  function removeSelectedLayer() {
+    if (!draft || !node || !canDeleteLayer(node)) return;
+    const next = deleteLayer(draft, node.id);
+    change(next);
+    setDeleted({ template: draft, node });
+    const folder = folderForLayer(node.id, data?.layers ?? []);
+    setNodeId(
+      layersInFolder(next.nodes, data?.layers ?? [], folder)[0]?.id ?? "",
+    );
+  }
   const changeNode = (update: Partial<TemplateNode>) => {
     if (draft)
       change({
+        ...(update.src && draft.defaults
+          ? {
+              defaults: {
+                ...draft.defaults,
+                edits: {
+                  ...draft.defaults.edits,
+                  images: { ...draft.defaults.edits.images, [nodeId]: "" },
+                },
+              },
+            }
+          : {}),
         nodes: draft.nodes.map((n) =>
           n.id === nodeId ? { ...n, ...update } : n,
         ),
@@ -141,11 +209,17 @@ export default function Admin() {
     if (!r.ok) throw Error(d.error || "操作失败");
     return d;
   }
-  async function action(name: string, extra: object = {}) {
+  async function action(name: string, extra: object = {}, source = draft) {
     setBusy(true);
     setMessage("");
     try {
-      await post({ action: name, id, revision, template: draft, ...extra });
+      const template =
+        name === "save" && source
+          ? await persistDefaultDisplay(source, defaultUploads.current)
+          : source;
+      if (name === "save" && template)
+        template.cover = await createTemplateCover(template);
+      await post({ action: name, id, revision, template, ...extra });
       await refresh();
       setMessage(
         (
@@ -188,6 +262,7 @@ export default function Admin() {
     }
     setId(row.id);
     setDraft(row.draft);
+    setDeleted(undefined);
     setRevision(row.revision);
     setNodeId(row.draft.nodes[0]?.id ?? "");
   }
@@ -220,7 +295,6 @@ export default function Admin() {
           <div className="login-decoration">
             <Layers3 size={36} />
           </div>
-          <h1>管理每一份好设计。</h1>
           <p>登录 Linkora 模板工作台</p>
           <form
             className="login-card"
@@ -279,16 +353,30 @@ export default function Admin() {
             {Object.entries({
               templates: "模板管理",
               layers: "图层与权限",
+              labels: "中英文标签位置",
+              codes: "三码放置区域",
+              defaults: "更改默认展示",
               options: "前台选项",
               assets: "素材库",
               versions: "发布与历史",
             }).map(([key, label], i) => {
-              const Icon = [Layers3, Settings2, Eye, FolderOpen, History][i];
+              const Icon = [
+                Layers3,
+                Settings2,
+                Settings2,
+                Layers3,
+                ImagePlus,
+                Eye,
+                FolderOpen,
+                History,
+              ][i];
               return (
                 <button
                   key={key}
                   className={section === key ? "active" : ""}
-                  onClick={() => setSection(key as typeof section)}
+                  onClick={() => {
+                    if (!busy) setSection(key as typeof section);
+                  }}
                 >
                   <Icon size={18} />
                   {label}
@@ -311,27 +399,16 @@ export default function Admin() {
           </aside>
           <section className="admin-main">
             <div className="admin-title">
-              <div>
-                <div className="eyebrow">LINKORA STUDIO</div>
-                <h1>
-                  {
-                    {
-                      templates: "让好设计，成为模板。",
-                      layers: "每一层，都恰到好处。",
-                      options: "把选择，留给创作者。",
-                      assets: "收集一点创作灵感。",
-                      versions: "每次发布，都有迹可循。",
-                    }[section]
-                  }
-                </h1>
-                <p>
-                  {draft?.name ?? "尚无模板"}{" "}
-                  <span className="muted">
-                    / {dirty ? "有未保存修改" : "草稿已同步"}
-                  </span>
-                </p>
-              </div>
               <div className="admin-actions">
+                {dirty && (
+                  <button
+                    className="text-button"
+                    disabled={busy}
+                    onClick={() => refresh()}
+                  >
+                    放弃未保存修改
+                  </button>
+                )}
                 <button
                   className="secondary"
                   disabled={busy || !draft}
@@ -350,11 +427,19 @@ export default function Admin() {
                 </button>
               </div>
             </div>
-            {dirty && (
-              <div className="unsaved-bar">
-                当前修改仅存在于此窗口。
-                <button className="text-button" onClick={() => refresh()}>
-                  放弃未保存修改
+            {deleted && (
+              <div className="layer-deletion-notice" role="status">
+                <span>已删除“{deleted.node.name}”，保存草稿后保留此修改。</span>
+                <button
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() => {
+                    change(deleted.template);
+                    setNodeId(deleted.node.id);
+                  }}
+                >
+                  <Undo2 size={15} />
+                  撤销删除
                 </button>
               </div>
             )}
@@ -383,7 +468,10 @@ export default function Admin() {
                         onClick={() => selectTemplate(row)}
                       >
                         <div className="template-thumbnail">
-                          <img src={row.draft.cover} alt={row.draft.name} />
+                          <img
+                            src={row.publishedCover ?? row.draft.cover}
+                            alt={row.draft.name}
+                          />
                           <span className="template-size">
                             {row.published
                               ? "已发布 v" + row.published
@@ -419,22 +507,12 @@ export default function Admin() {
                         }
                       />
                     </label>
-                    <label className="field">
+                    <div className="field">
                       封面
-                      <select
-                        value={draft.cover}
-                        onChange={(e) => change({ cover: e.target.value })}
-                      >
-                        <option value={draft.cover}>当前封面</option>
-                        {data?.assets
-                          .filter((a) => a.category !== "font")
-                          .map((a) => (
-                            <option key={a.id} value={a.src}>
-                              {a.name}
-                            </option>
-                          ))}
-                      </select>
-                    </label>
+                      <p className="muted">
+                        保存草稿时会按当前模板和默认展示自动更新；访客载入编辑预览前会显示这张图。
+                      </p>
+                    </div>
                     <label className="field">
                       模板字体
                       <select
@@ -469,253 +547,297 @@ export default function Admin() {
                 )}
               </div>
             )}
+            {section === "labels" && draft && (
+              <LabelPosition
+                key={draft.id}
+                template={draft}
+                saved={data?.templates.find((t) => t.id === id)?.draft}
+                onChange={(nodes) => change({ nodes })}
+              />
+            )}
             {section === "layers" && draft && (
-              <div className="admin-columns layers-columns">
-                <div className="admin-card">
-                  <div className="section-title">
-                    <h2>原始图层顺序</h2>
-                    <button
-                      className="text-button"
-                      onClick={() => setShowImport(!showImport)}
-                    >
-                      <Plus size={14} />
-                      导入图层
-                    </button>
-                  </div>
-                  <p className="muted">
-                    由底至顶排列。名称和菜单排序不改变叠放关系。
-                  </p>
-                  {showImport && (
-                    <div className="import-layers">
-                      <select
-                        aria-label="从 PSD 导入图层"
-                        defaultValue=""
-                        onChange={(e) => {
-                          const l = data?.layers.find(
-                            (l) => l.id === e.target.value,
-                          );
-                          if (!l) return;
-                          const [x, y, r, b] = l.bbox;
-                          const n: TemplateNode = {
-                            id: l.id,
-                            name: l.name,
-                            src: `/private-assets/layer-${l.id}.png`,
-                            x,
-                            y,
-                            width: r - x,
-                            height: b - y,
-                            role: l.kind === "type" ? "text" : "image",
-                            visible: false,
-                            opacity: l.opacity / 255,
-                            colorEditable: false,
-                            contentEditable: false,
-                            styleEditable: false,
-                            positionEditable: false,
-                            sizeEditable: false,
-                            defaultText: l.text ?? "",
-                            originalText: l.text ?? "",
-                            maxLength: 60,
-                            fontSize: 42,
-                            color: "#aaaaaa",
-                          };
-                          const nodes = [...draft.nodes, n].sort((a, b) =>
-                            a.id.localeCompare(b.id, undefined, {
-                              numeric: true,
-                            }),
-                          );
-                          change({ nodes });
-                          setNodeId(n.id);
-                          setShowImport(false);
-                        }}
-                      >
-                        <option value="">选择一个 PSD 图层…</option>
-                        {data?.layers
-                          .filter(
-                            (l) =>
-                              l.bbox[2] > l.bbox[0] &&
-                              !draft.nodes.some((n) => n.id === l.id),
-                          )
-                          .map((l) => (
-                            <option key={l.id} value={l.id}>
-                              {l.id} · {l.name}
-                            </option>
-                          ))}
-                      </select>
-                      <p className="muted">
-                        新导入图层默认隐藏并锁定。含图层组时请避免重复显示其子图层。
-                      </p>
-                    </div>
+              <div className="position-workspace layers-position-workspace">
+                <div
+                  className="position-preview-panel"
+                  ref={setLayerPreviewTarget}
+                >
+                  {!node && (
+                    <p className="muted">在右侧选择图层，即可预览和调整。</p>
                   )}
-                  <div className="layer-list">
-                    {draft.nodes.map((n) => (
-                      <button
-                        key={n.id}
-                        className={nodeId === n.id ? "active" : ""}
-                        onClick={() => setNodeId(n.id)}
-                      >
-                        <span className="layer-number">{n.id}</span>
-                        <span>
-                          {n.name}
-                          <small>{n.role}</small>
-                        </span>
-                        {n.colorEditable || n.contentEditable ? (
-                          <Settings2 size={14} />
-                        ) : (
-                          <LockKeyhole size={14} />
-                        )}
-                      </button>
-                    ))}
-                  </div>
                 </div>
-                {node && (
+                <div className="position-controls-panel">
                   <div className="admin-card">
-                    <h2>图层设置</h2>
-                    <label className="field">
-                      管理名称
-                      <input
-                        value={node.name}
-                        onChange={(e) => changeNode({ name: e.target.value })}
-                      />
-                    </label>
-                    <label className="field">
-                      图层默认素材
-                      <select
-                        value={node.src}
-                        onChange={(e) => changeNode({ src: e.target.value })}
+                    <div className="section-title">
+                      <h2>二维码下方文字</h2>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => setSection("labels")}
                       >
-                        <option value={node.src}>当前素材</option>
-                        {data?.assets
-                          .filter((a) => a.category !== "font")
-                          .map((a) => (
-                            <option key={a.id} value={a.src}>
-                              {a.name}
-                            </option>
-                          ))}
-                      </select>
-                    </label>
-                    <div className="meta-line">
-                      内部标识 <code>{node.id}</code> · 坐标 {node.x}, {node.y}{" "}
-                      · {node.width} × {node.height}
+                        调整中英文标签位置
+                      </button>
                     </div>
-                    <label className="check-label">
-                      <input
-                        type="checkbox"
-                        checked={node.visible}
-                        onChange={(e) =>
-                          changeNode({ visible: e.target.checked })
-                        }
-                        disabled={["wechat", "alipay", "reward"].includes(
-                          node.role,
-                        )}
-                      />
-                      默认显示
-                    </label>
-                    <label className="check-label">
-                      <input
-                        type="checkbox"
-                        checked={node.contentEditable}
-                        disabled={
-                          ![
-                            "avatar",
-                            "rewardAvatar",
-                            "background",
-                            "signature",
-                            "text",
-                          ].includes(node.role)
-                        }
-                        onChange={(e) =>
-                          changeNode({ contentEditable: e.target.checked })
-                        }
-                      />
-                      允许修改内容 / 上传
-                    </label>
-                    <label className="check-label">
-                      <input
-                        type="checkbox"
-                        checked={node.styleEditable}
-                        disabled={!["wechat", "alipay"].includes(node.role)}
-                        onChange={(e) =>
-                          changeNode({ styleEditable: e.target.checked })
-                        }
-                      />
-                      允许二维码样式调整
-                    </label>
-                    <label className="check-label">
-                      <input
-                        type="checkbox"
-                        checked={node.colorEditable}
-                        disabled={["wechat", "alipay", "reward"].includes(
-                          node.role,
-                        )}
-                        onChange={(e) =>
-                          changeNode({ colorEditable: e.target.checked })
-                        }
-                      />
-                      开放图层颜色叠加
-                    </label>
-                    {node.colorEditable && (
-                      <label className="field">
-                        默认叠加颜色
-                        <input
-                          type="color"
-                          value={node.color}
-                          onChange={(e) =>
-                            changeNode({ color: e.target.value })
+                    <p className="muted">
+                      单独移动中文、英文标签，或一键对齐到对应二维码。
+                    </p>
+                  </div>
+                  <LayerBrowser
+                    key={draft.id}
+                    nodes={draft.nodes.map((n) => ({
+                      ...n,
+                      src: draft.defaults?.edits.images[n.id] || n.src,
+                    }))}
+                    layers={data?.layers ?? []}
+                    assets={draft.assets}
+                    selectedId={nodeId}
+                    onSelect={setNodeId}
+                    onAddAsset={() => setAddAsset(true)}
+                    onImport={(l) => {
+                      const [x, y, right, bottom] = l.bbox;
+                      const imported: TemplateNode = {
+                        id: l.id,
+                        name: l.name,
+                        src: `/private-assets/layer-${l.id}.png`,
+                        x,
+                        y,
+                        width: right - x,
+                        height: bottom - y,
+                        role: l.kind === "type" ? "text" : "image",
+                        visible: false,
+                        opacity: l.opacity / 255,
+                        colorEditable: false,
+                        contentEditable: false,
+                        styleEditable: false,
+                        positionEditable: false,
+                        sizeEditable: false,
+                        defaultText: l.text ?? "",
+                        originalText: l.text ?? "",
+                        maxLength: 60,
+                        fontSize: 42,
+                        color: "#aaaaaa",
+                      };
+                      change({
+                        nodes: [
+                          ...draft.nodes,
+                          defaultLayerColor(imported),
+                        ].sort((a, b) =>
+                          a.id.localeCompare(b.id, undefined, {
+                            numeric: true,
+                          }),
+                        ),
+                      });
+                      setNodeId(imported.id);
+                    }}
+                  />
+                  {node && (
+                    <div className="admin-card">
+                      <div className="section-title">
+                        <h2>图层设置</h2>
+                        <button
+                          type="button"
+                          className="text-button delete-layer-button"
+                          disabled={busy || !canDeleteLayer(node)}
+                          title={
+                            canDeleteLayer(node)
+                              ? `删除“${node.name}”`
+                              : "三个码及其固定外框不能删除"
                           }
+                          onClick={removeSelectedLayer}
+                        >
+                          <Trash2 size={16} />
+                          删除图层
+                        </button>
+                      </div>
+                      <label className="field">
+                        管理名称
+                        <input
+                          value={node.name}
+                          onChange={(e) => changeNode({ name: e.target.value })}
                         />
                       </label>
-                    )}
-                    <div className="locked-note">
-                      <LockKeyhole size={14} />
-                      位置和尺寸固定，前台不能移动
-                    </div>
-                    {["text", "signature"].includes(node.role) && (
-                      <>
-                        <label className="field">
-                          默认文案
-                          <input
-                            value={node.defaultText}
-                            onChange={(e) =>
-                              changeNode({ defaultText: e.target.value })
+                      <label className="field">
+                        图层默认素材
+                        <select
+                          disabled={isCodeFrame(node)}
+                          value={
+                            draft.defaults?.edits.images[node.id] || node.src
+                          }
+                          onChange={(e) => changeNode({ src: e.target.value })}
+                        >
+                          <option
+                            value={
+                              draft.defaults?.edits.images[node.id] || node.src
                             }
+                          >
+                            当前素材
+                          </option>
+                          {data?.assets
+                            .filter((a) => a.category !== "font")
+                            .map((a) => (
+                              <option key={a.id} value={a.src}>
+                                {a.name}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <div className="meta-line">
+                        内部标识 <code>{node.id}</code> · 坐标 {node.x},{" "}
+                        {node.y} · {node.width} × {node.height}
+                      </div>
+                      <LayerPosition
+                        previewTarget={layerPreviewTarget}
+                        key={node.id}
+                        template={draft}
+                        node={node}
+                        saved={data?.templates
+                          .find((t) => t.id === id)
+                          ?.draft.nodes.find((n) => n.id === node.id)}
+                        onChange={(nodes) => change({ nodes })}
+                      />
+                      <label className="check-label">
+                        <input
+                          type="checkbox"
+                          checked={node.visible}
+                          onChange={(e) =>
+                            changeNode({ visible: e.target.checked })
+                          }
+                          disabled={
+                            isCodeFrame(node) ||
+                            ["wechat", "alipay", "reward"].includes(node.role)
+                          }
+                        />
+                        默认显示
+                      </label>
+                      <label className="check-label">
+                        <input
+                          type="checkbox"
+                          checked={node.contentEditable}
+                          disabled={
+                            ![
+                              "avatar",
+                              "rewardAvatar",
+                              "background",
+                              "signature",
+                              "text",
+                            ].includes(node.role)
+                          }
+                          onChange={(e) =>
+                            changeNode({ contentEditable: e.target.checked })
+                          }
+                        />
+                        允许修改内容 / 上传
+                      </label>
+                      <label className="check-label">
+                        <input
+                          type="checkbox"
+                          checked={node.styleEditable}
+                          disabled={!["wechat", "alipay"].includes(node.role)}
+                          onChange={(e) =>
+                            changeNode({ styleEditable: e.target.checked })
+                          }
+                        />
+                        允许二维码样式调整
+                      </label>
+                      <label className="check-label">
+                        <input
+                          type="checkbox"
+                          checked={node.colorEditable}
+                          disabled={["wechat", "alipay"].includes(node.role)}
+                          onChange={(e) =>
+                            changeNode({ colorEditable: e.target.checked })
+                          }
+                        />
+                        开放图层颜色叠加
+                      </label>
+                      {node.colorEditable && (
+                        <div className="field">
+                          默认叠加颜色
+                          <ColorPicker
+                            label="默认叠加颜色"
+                            value={node.color}
+                            onChange={(color) => changeNode({ color })}
                           />
-                        </label>
-                        <div className="two-fields">
-                          <label>
-                            字数上限
-                            <input
-                              type="number"
-                              min="1"
-                              max={node.role === "signature" ? 12 : 200}
-                              value={node.maxLength}
-                              onChange={(e) =>
-                                changeNode({
-                                  maxLength: Number(e.target.value),
-                                })
-                              }
-                            />
-                          </label>
-                          <label>
-                            字号（px）
-                            <input
-                              type="number"
-                              min="8"
-                              max="300"
-                              value={node.fontSize}
-                              onChange={(e) =>
-                                changeNode({ fontSize: Number(e.target.value) })
-                              }
-                            />
-                          </label>
                         </div>
+                      )}
+                      {node.strokeOnly && (
                         <p className="muted">
-                          居中单行排版，超出可用宽度时缩小适配。
+                          仅外侧边线叠加颜色，框内底色保持白色。
                         </p>
-                      </>
-                    )}
-                  </div>
-                )}
+                      )}
+                      <div className="locked-note">
+                        <LockKeyhole size={14} />
+                        位置由管理员调整，保存并发布后生效；前台不能移动
+                      </div>
+                      {["text", "signature"].includes(node.role) && (
+                        <>
+                          <label className="field">
+                            默认文案
+                            <input
+                              value={node.defaultText}
+                              onChange={(e) =>
+                                changeNode({ defaultText: e.target.value })
+                              }
+                            />
+                          </label>
+                          <div className="two-fields">
+                            <label>
+                              字数上限
+                              <input
+                                type="number"
+                                min="1"
+                                max={node.role === "signature" ? 12 : 200}
+                                value={node.maxLength}
+                                onChange={(e) =>
+                                  changeNode({
+                                    maxLength: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label>
+                              字号（px）
+                              <input
+                                type="number"
+                                min="8"
+                                max="300"
+                                value={node.fontSize}
+                                onChange={(e) =>
+                                  changeNode({
+                                    fontSize: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </label>
+                          </div>
+                          <p className="muted">
+                            居中单行排版，超出可用宽度时缩小适配。
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
+            )}
+            {section === "codes" && draft && (
+              <CodePlacement
+                key={draft.id}
+                template={draft}
+                saved={data?.templates.find((t) => t.id === id)?.draft}
+                onChange={(nodes) => change({ nodes })}
+              />
+            )}
+            {section === "defaults" && draft && (
+              <fieldset className="default-display-fieldset" disabled={busy}>
+                <Studio
+                  key={`${draft.id}:${revision}`}
+                  adminTemplate={draft}
+                  onDefaultsChange={(defaults) => change({ defaults })}
+                  onSaveBackground={(defaults) =>
+                    action("save", {}, { ...draft, defaults, verified: false })
+                  }
+                />
+              </fieldset>
             )}
             {section === "options" && draft && (
               <div className="options-area">
@@ -839,11 +961,12 @@ export default function Admin() {
                             })
                           }
                         />
-                        <select
-                          aria-label="关联图层（可多选）"
-                          multiple
+                        <OptionLayerPicker
+                          nodes={draft.nodes.filter((n) =>
+                            ["image", "text", "rewardIcon"].includes(n.role),
+                          )}
                           value={ch.nodeIds}
-                          onChange={(e) =>
+                          onChange={(nodeIds) =>
                             change({
                               options: draft.options.map((p) =>
                                 p.id === o.id
@@ -853,9 +976,7 @@ export default function Admin() {
                                         c.id === ch.id
                                           ? {
                                               ...c,
-                                              nodeIds: Array.from(
-                                                e.target.selectedOptions,
-                                              ).map((o) => o.value),
+                                              nodeIds,
                                             }
                                           : c,
                                       ),
@@ -864,18 +985,7 @@ export default function Admin() {
                               ),
                             })
                           }
-                        >
-                          {draft.nodes
-                            .filter((n) =>
-                              ["image", "text", "rewardIcon"].includes(n.role),
-                            )
-                            .map((n) => (
-                              <option key={n.id} value={n.id}>
-                                {n.id} · {n.name}
-                              </option>
-                            ))}
-                        </select>
-                        <span className="muted">Ctrl / ⌘ 多选图层</span>
+                        />
                         <button
                           className="text-button"
                           disabled={o.choices.length === 1}
@@ -1056,6 +1166,10 @@ export default function Admin() {
                         id={a.id}
                         name={a.name}
                         distributable={!!a.distributable}
+                        currentTemplateId={id}
+                        linkedToCurrentTemplate={
+                          !!draft?.assets.some((x) => x.id === a.id)
+                        }
                         onError={setMessage}
                         onDone={async () => {
                           setData(
@@ -1105,60 +1219,130 @@ export default function Admin() {
                 </div>
                 <div className="admin-card">
                   <h2>版本历史</h2>
-                  {data?.versions
-                    .filter((v) => v.template_id === id)
-                    .map((v) => (
-                      <div className="version-row" key={v.version}>
-                        <span className="version-icon">
-                          <History size={18} />
-                        </span>
-                        <div>
-                          <strong>
-                            版本 {v.version}
-                            {data.templates.find((t) => t.id === id)
-                              ?.published === v.version && (
-                              <span className="pill">当前发布</span>
-                            )}
-                          </strong>
-                          <p className="muted">{v.created} UTC</p>
-                        </div>
-                        <button
-                          className="text-button"
-                          onClick={async () => {
-                            try {
-                              const t = await fetch(
-                                `/api/templates?id=${id}&version=${v.version}`,
-                              ).then((r) => r.json());
-                              await showPreview(t);
-                            } catch (e) {
-                              setMessage((e as Error).message);
-                            }
-                          }}
-                        >
-                          预览
-                        </button>
-                        <button
-                          className="text-button"
-                          disabled={dirty || busy}
-                          onClick={() =>
-                            action("restore", { version: v.version })
-                          }
-                        >
-                          恢复
-                        </button>
+                  {visibleVersions.map((v) => (
+                    <div className="version-row" key={v.version}>
+                      <span className="version-icon">
+                        <History size={18} />
+                      </span>
+                      <div>
+                        <strong>
+                          版本 {v.version}
+                            {data?.templates.find((t) => t.id === id)
+                            ?.published === v.version && (
+                            <span className="pill">当前发布</span>
+                          )}
+                        </strong>
+                        <p className="muted">{formatBeijingTime(v.created)}</p>
                       </div>
-                    ))}
+                      <button
+                        className="text-button"
+                        onClick={async () => {
+                          try {
+                            const t = await fetch(
+                              `/api/templates?id=${id}&version=${v.version}`,
+                            ).then((r) => r.json());
+                            await showPreview(t);
+                          } catch (e) {
+                            setMessage((e as Error).message);
+                          }
+                        }}
+                      >
+                        预览
+                      </button>
+                      <button
+                        className="text-button"
+                        disabled={dirty || busy}
+                        onClick={() =>
+                          action("restore", { version: v.version })
+                        }
+                      >
+                        恢复
+                      </button>
+                    </div>
+                  ))}
+                  {!templateVersions.length && (
+                    <p className="muted">还没有已发布的版本。</p>
+                  )}
+                  {templateVersions.length > versionsPerPage && (
+                    <nav
+                      className="version-pagination"
+                      aria-label="版本历史分页"
+                    >
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={currentVersionPage === 0}
+                        onClick={() => setVersionPage((page) => page - 1)}
+                      >
+                        上一页
+                      </button>
+                      <span>
+                        第 {currentVersionPage + 1} / {versionPageCount} 页
+                      </span>
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={currentVersionPage === versionPageCount - 1}
+                        onClick={() => setVersionPage((page) => page + 1)}
+                      >
+                        下一页
+                      </button>
+                    </nav>
+                  )}
                 </div>
               </div>
             )}
           </section>
         </main>
       )}
+      {addAsset && draft && (
+        <AddTemplateAsset
+          assets={draft.assets}
+          initialCategory={
+            node &&
+            ["background", "avatar", "rewardAvatar", "rewardIcon"].includes(
+              node.role,
+            )
+              ? (node.role as Asset["category"])
+              : "background"
+          }
+          onClose={() => setAddAsset(false)}
+          onAdded={(added) => {
+            change({
+              assets: [...draft.assets, ...added],
+              nodes: draft.nodes.map((n) =>
+                added.some((asset) => n.role === asset.category) &&
+                n.role !== "rewardIcon"
+                  ? { ...n, contentEditable: true }
+                  : n,
+              ),
+            });
+            setData((d) =>
+              d
+                ? {
+                    ...d,
+                    assets: [
+                      ...d.assets,
+                      ...added.map((asset) => ({ ...asset, distributable: 0 })),
+                    ],
+                  }
+                : d,
+            );
+            setMessage(
+              `已添加 ${added.length} 张素材，保存并发布后用户即可选择`,
+            );
+          }}
+        />
+      )}
       {message && (
-        <div className="toast" role="status">
+        <div className="toast admin-toast" role="status">
           <span>{message}</span>
-          <button aria-label="关闭提示" onClick={() => setMessage("")}>
-            ×
+          <button
+            type="button"
+            aria-label="关闭提示"
+            onClick={() => setMessage("")}
+          >
+            <X size={14} aria-hidden="true" />
           </button>
         </div>
       )}

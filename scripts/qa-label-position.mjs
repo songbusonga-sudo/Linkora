@@ -1,0 +1,78 @@
+import { chromium, expect } from "@playwright/test";
+import { readFileSync, mkdirSync } from "node:fs";
+import assert from "node:assert/strict";
+
+const base = process.env.QA_BASE_URL || "http://localhost:8982";
+mkdirSync(".local/qa", { recursive: true });
+const browser = await chromium.launch({ channel: "chrome", headless: true });
+try {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1080 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(base + "/admin");
+  await page.getByLabel("管理员密码").fill(readFileSync(".local/admin-access.txt", "utf8").match(/^Password: (.+)$/m)[1]);
+  await page.getByRole("button", { name: "进入工作台", exact: true }).click();
+  await page.getByRole("button", { name: "保存草稿", exact: true }).waitFor();
+  const before = await page.request.get(base + "/api/admin").then((r) => r.json());
+  const state = structuredClone(before), row = state.templates[0];
+  // Save and reload against an in-memory API so QA never changes real templates.
+  await page.route("**/api/admin", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: state });
+    const body = route.request().postDataJSON();
+    assert.equal(body.action, "save");
+    assert.equal(body.revision, row.revision);
+    row.draft = body.template;
+    row.revision++;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.getByRole("button", { name: "图层与权限", exact: true }).click();
+  await page.getByRole("button", { name: "调整中英文标签位置", exact: true }).click();
+  const canvas = page.getByRole("img", { name: "图层位置实时预览", exact: true });
+  await expect(canvas).toHaveAttribute("data-position", /^9-0:/, { timeout: 60000 });
+  await page.getByRole("button", { name: "英文标签一键对齐", exact: true }).click();
+  await page.getByRole("group", { name: "选择文字图层", exact: true }).getByRole("button", { name: "ZFB", exact: true }).click();
+  await page.getByLabel("横坐标 X（px）").fill("1540");
+  await page.getByLabel("纵坐标 Y（px）").fill("1635");
+  await expect(canvas).toHaveAttribute("data-position", "9-4:1540:1635");
+  await page.getByRole("button", { name: "中文", exact: true }).click();
+  await expect(canvas).toHaveAttribute("data-position", /^8-0:/);
+  await page.getByRole("button", { name: "中文标签一键对齐", exact: true }).click();
+  await page.getByLabel("纵坐标 Y（px）").fill("1650");
+  await page.getByRole("button", { name: "英文", exact: true }).click();
+  await page.getByRole("group", { name: "选择文字图层", exact: true }).getByRole("button", { name: "ZFB", exact: true }).click();
+  await expect(page.getByLabel("横坐标 X（px）")).toHaveValue("1540");
+  await expect(page.getByLabel("纵坐标 Y（px）")).toHaveValue("1635");
+  const dragBox = await page.locator(".layer-position-outline").boundingBox();
+  assert.ok(dragBox);
+  await page.mouse.move(dragBox.x + dragBox.width / 2, dragBox.y + dragBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(dragBox.x + dragBox.width / 2 + 8, dragBox.y + dragBox.height / 2 + 5, { steps: 3 });
+  await page.mouse.up();
+  await expect.poll(async () => Number(await page.getByLabel("横坐标 X（px）").inputValue())).toBeGreaterThan(1540);
+  await page.getByLabel("横坐标 X（px）").fill("1540");
+  await page.getByLabel("纵坐标 Y（px）").fill("1635");
+  // Keyboard nudges are handled by the preview, using original canvas pixels.
+  const preview = page.getByRole("group", { name: "拖动所选图层", exact: true });
+  await preview.focus();
+  await preview.press("ArrowRight");
+  await expect(page.getByLabel("横坐标 X（px）")).toHaveValue("1541");
+  await page.getByRole("button", { name: "保存草稿", exact: true }).click();
+  await expect(page.getByText("草稿已保存", { exact: true })).toBeVisible();
+  assert.equal(row.draft.nodes.find((n) => n.id === "9-4").x, 1541);
+  assert.equal(row.draft.nodes.find((n) => n.id === "8-0").y, 1650);
+  const labelIds = new Set(["8-0", "8-1", "8-2", "9-0", "9-3", "9-4"]);
+  assert.deepEqual(row.draft.nodes.filter((n) => !labelIds.has(n.id)), before.templates[0].draft.nodes.filter((n) => !labelIds.has(n.id)));
+  await page.reload();
+  await page.getByRole("button", { name: "中英文标签位置", exact: true }).click();
+  await page.getByRole("group", { name: "选择文字图层", exact: true }).getByRole("button", { name: "ZFB", exact: true }).click();
+  await expect(page.getByLabel("横坐标 X（px）")).toHaveValue("1541");
+  await expect(canvas).toHaveAttribute("data-position", "9-4:1541:1635");
+  await page.screenshot({ path: ".local/qa/label-position-desktop.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.screenshot({ path: ".local/qa/label-position-mobile.png" });
+  assert.deepEqual(errors, []);
+  const after = await page.request.get(base + "/api/admin").then((r) => r.json());
+  assert.deepEqual(after.templates, before.templates);
+  console.log("Label position QA passed: entry, language switching, centering, coordinates, keyboard, save/reload, mobile and untouched real templates.");
+} finally { await browser.close(); }

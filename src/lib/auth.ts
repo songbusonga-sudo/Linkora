@@ -6,6 +6,7 @@ import {
   randomBytes,
 } from "node:crypto";
 import { db } from "./db";
+import { allowedRequestOrigin } from "./request-origin";
 export const digest = (s: string) =>
   createHash("sha256").update(s).digest("hex");
 export async function isAdmin() {
@@ -17,10 +18,7 @@ export async function isAdmin() {
   return !!row && Number(row.expires) > Date.now();
 }
 export function sameOrigin(req: Request) {
-  const origin = req.headers.get("origin");
-  return (
-    !!origin && origin === (process.env.APP_ORIGIN || new URL(req.url).origin)
-  );
+  return allowedRequestOrigin(req, process.env.APP_ORIGIN);
 }
 export function passwordValid(password: string) {
   const value = process.env.ADMIN_PASSWORD_HASH;

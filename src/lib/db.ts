@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { templateSchema, Template, validateTemplate } from "./model";
+import { editableFooter } from "./template-upgrades";
 const root = process.env.LINKORA_DATA_DIR || path.join(process.cwd(), "data");
 mkdirSync(root, { recursive: true });
 const globalDb = globalThis as unknown as { linkoraDb?: DatabaseSync };
@@ -44,13 +45,13 @@ export function published() {
       "SELECT v.snapshot FROM versions v JOIN templates t ON t.id=v.template_id AND t.published=v.version",
     )
     .all()
-    .map((r) => JSON.parse(r.snapshot as string) as Template);
+    .map((r) => editableFooter(JSON.parse(r.snapshot as string) as Template));
 }
 export function snapshot(id: string, version: number) {
   const r = db
     .prepare("SELECT snapshot FROM versions WHERE template_id=? AND version=?")
     .get(id, version);
-  return r ? (JSON.parse(r.snapshot as string) as Template) : null;
+  return r ? editableFooter(JSON.parse(r.snapshot as string) as Template) : null;
 }
 export function saveDraft(t: Template, expectedRevision: number) {
   validateTemplate(t);
