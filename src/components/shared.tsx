@@ -344,6 +344,12 @@ export function RewardAlignDialog({
     crop: Crop;
     handle?: (typeof rewardHandles)[number];
   } | null>(null);
+  const touchPoints = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<{
+    distance: number;
+    scale: number;
+    crop: Crop;
+  } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -394,6 +400,18 @@ export function RewardAlignDialog({
     };
   };
   const move = (event: PointerEvent<HTMLDivElement>) => {
+    const point = touchPoints.current.get(event.pointerId);
+    if (point) {
+      point.x = event.clientX;
+      point.y = event.clientY;
+      const start = pinch.current;
+      if (start && touchPoints.current.size >= 2) {
+        const [first, second] = [...touchPoints.current.values()];
+        const distance = Math.hypot(first.x - second.x, first.y - second.y);
+        resizeAroundGuide(start.crop, (distance - start.distance) * start.scale);
+        return;
+      }
+    }
     const start = drag.current;
     if (!start || event.pointerId !== start.id) return;
     const dx = (event.clientX - start.x) * start.scale;
@@ -414,6 +432,38 @@ export function RewardAlignDialog({
     if (!event.ctrlKey) return;
     event.preventDefault();
     resizeAroundGuide(crop, event.deltaY * (crop.size / 520));
+  };
+  const trackTouch = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType !== "touch" || !stage.current) return;
+    event.preventDefault();
+    stage.current.setPointerCapture(event.pointerId);
+    touchPoints.current.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    });
+    if (touchPoints.current.size !== 2) return;
+    const [first, second] = [...touchPoints.current.values()];
+    pinch.current = {
+      distance: Math.hypot(first.x - second.x, first.y - second.y),
+      scale: crop.size / stage.current.getBoundingClientRect().width,
+      crop: { ...crop },
+    };
+    // A pinch takes precedence over a previous one-finger drag.
+    drag.current = null;
+  };
+  const endTouch = (event: PointerEvent<HTMLDivElement>) => {
+    touchPoints.current.delete(event.pointerId);
+    if (pinch.current) {
+      pinch.current = null;
+      drag.current = null;
+    } else if (event.pointerId === drag.current?.id) {
+      drag.current = null;
+    }
+  };
+  const cancelTouch = () => {
+    touchPoints.current.clear();
+    pinch.current = null;
+    drag.current = null;
   };
   const imageStyle = {
     left: `${(-crop.x / crop.size) * 100}%`,
@@ -446,13 +496,11 @@ export function RewardAlignDialog({
         <div
           ref={stage}
           className="reward-align-stage"
+          onPointerDown={trackTouch}
           onPointerMove={move}
-          onPointerUp={(event) => {
-            if (event.pointerId === drag.current?.id) drag.current = null;
-          }}
-          onPointerCancel={() => {
-            drag.current = null;
-          }}
+          onPointerUp={endTouch}
+          onPointerCancel={cancelTouch}
+          onLostPointerCapture={cancelTouch}
           onWheel={zoom}
         >
           <div className="reward-align-artwork" style={imageStyle}>
@@ -492,7 +540,7 @@ export function RewardAlignDialog({
           ))}
         </div>
         <p className="muted reward-align-help">
-          拖动图片调整位置，拖动四角缩放；触控板双指捏合可缩放。
+          拖动图片调整位置，拖动四角缩放；手机双指或触控板双指捏合可缩放。
         </p>
         <div className="modal-actions">
           <button

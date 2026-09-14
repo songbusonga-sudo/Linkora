@@ -19,8 +19,11 @@ export async function GET(
     return new Response(image, {
       headers: {
         "Content-Type": "image/png",
-        "Content-Disposition": "inline",
-        "Cache-Control": "private, max-age=86400",
+        "Content-Length": String(image.byteLength),
+        "Content-Disposition": 'inline; filename="linkora-card.png"',
+        // The UUID in this short-lived URL is unguessable. A normal cacheable
+        // image response is accepted by more in-app long-press save flows.
+        "Cache-Control": "public, max-age=86400, immutable",
         "X-Content-Type-Options": "nosniff",
       },
     });

@@ -23,7 +23,6 @@ export function resolveDefaultDisplay(
     );
   const effectiveEdits = {
     codeColors: { ...defaults.edits.codeColors, ...edits.codeColors },
-    rewardAvatarOpacity: edits.rewardAvatarOpacity ?? defaults.edits.rewardAvatarOpacity,
     images: { ...defaults.edits.images, ...allowed("images") },
     texts: { ...defaults.edits.texts, ...allowed("texts") },
     colors: { ...defaults.edits.colors, ...allowed("colors") },

@@ -33,8 +33,13 @@ import {
 import { drawTemplate } from "@/lib/render";
 import { backgroundViewport } from "@/lib/background-transform";
 import { codeFrame } from "@/lib/code-placement";
+import { rewardAlignmentGuide } from "@/lib/reward-alignment";
 import { presetStyle } from "@/lib/qr";
-import { codeColors, rewardArtworkIds, unifiedQRColor } from "@/lib/code-appearance";
+import {
+  codeColors,
+  rewardArtworkIds,
+  unifiedQRColor,
+} from "@/lib/code-appearance";
 import {
   CropDialog,
   Header,
@@ -90,7 +95,6 @@ export default function Studio({
     [inspect, setInspect] = useState(false),
     [exportImage, setExportImage] = useState<{
       url: string;
-      filename: string;
     }>(),
     [downloaded, setDownloaded] = useState(false),
     [crop, setCrop] = useState<{
@@ -215,10 +219,17 @@ export default function Studio({
     // The on-screen artboard is much smaller than the printable source. Keep
     // preview compositing light, then render the full-resolution image only
     // when the user downloads it.
+    const mobile = window.matchMedia("(pointer: coarse)").matches;
+    const previewEdge = mobile
+      ? 960
+      : 1200;
     const previewScale = Math.min(
       1,
-      1200 / Math.max(template.width, template.height),
+      previewEdge / Math.max(template.width, template.height),
     );
+    // The desktop preview uses the same template frames as the phone. The
+    // saved editor bounds are not a visual scale setting; applying them here
+    // shrinks the two side payment codes when a template has compact layers.
     drawTemplate(renderTemplate(template), edits, codes, styles, previewScale)
       .then((c) => {
         if (id !== drawId.current) return;
@@ -281,6 +292,10 @@ export default function Studio({
       return { ...e, [key]: values };
     });
   async function uploadCode(kind: CodeKind, file: File) {
+    // Switching to a new payment code starts a new task. Keep the settings
+    // area compact instead of leaving the other payment method's controls
+    // open above or below the upload card.
+    if (kind === "wechat" || kind === "alipay") setOpenDisclosure(null);
     setBusy(kind);
     setError("");
     try {
@@ -357,12 +372,15 @@ export default function Studio({
     setBusy("download");
     setError("");
     try {
+      const mobile = window.matchMedia("(pointer: coarse)").matches;
       const c = await drawTemplate(
         renderTemplate(template),
         edits,
         codes,
         styles,
-        2,
+        // A 1000px square stays sharp on phone screens while making the PNG
+        // quick to encode, upload, and long-press save in mobile browsers.
+        mobile ? Math.min(1, 1000 / Math.max(template.width, template.height)) : 2,
       );
       const blob = await new Promise<Blob>((resolve, reject) =>
         c.toBlob(
@@ -371,8 +389,11 @@ export default function Studio({
         ),
       );
       const filename = `Linkora-${template.id}-v${template.version}-${c.width}px.png`;
-      const mobile = window.matchMedia("(pointer: coarse)").matches;
       if (mobile) {
+        // WeChat and other in-app browsers cannot save a blob: URL to the
+        // photo album. Upload first, then open only the ordinary HTTPS PNG
+        // URL, so the image the user sees is also the image they long-press.
+        say("高清图片已生成，正在准备可保存图片…");
         const response = await fetch("/api/export", {
           method: "POST",
           headers: { "Content-Type": "image/png" },
@@ -381,7 +402,7 @@ export default function Studio({
         const result = (await response.json()) as { url?: string; error?: string };
         if (!response.ok || !result.url)
           throw Error(result.error || "导出图片保存失败");
-        setExportImage({ url: result.url, filename });
+        setExportImage({ url: new URL(result.url, window.location.origin).href });
         say("图片已生成，长按图片即可保存到相册");
         return;
       }
@@ -400,10 +421,6 @@ export default function Studio({
     } finally {
       setBusy("");
     }
-  }
-  function saveExportImage() {
-    if (!exportImage) return;
-    window.location.assign(exportImage.url);
   }
   function closeExportImage() {
     setExportImage(undefined);
@@ -473,7 +490,7 @@ export default function Studio({
     option.choices.some((choice) =>
       choice.nodeIds.some((id) => rewardLayerRoots.has(id.split("-")[0])),
     );
-  const steps = [
+  const baseSteps = [
     {
       title: "收款码上传与颜色",
       short: "收款码",
@@ -490,14 +507,18 @@ export default function Studio({
       description: "修改署名、底部两行文字，并分别调整颜色。",
     },
   ];
+  const steps = adminTemplate
+    ? baseSteps
+    : [
+        ...baseSteps,
+        {
+          title: "保存高清成品",
+          short: "保存",
+          description: "生成当前成品，长按高清图片即可保存到相册。",
+        },
+      ];
   function beginBackgroundEdit() {
     setBackgroundEditing(true);
-    if (window.matchMedia("(max-width: 900px)").matches)
-      requestAnimationFrame(() =>
-        previewCanvas.current
-          ?.closest(".preview-panel")
-          ?.scrollIntoView({ block: "start", behavior: "smooth" }),
-      );
   }
   function goStep(next: number) {
     setBackgroundEditing(false);
@@ -505,11 +526,6 @@ export default function Studio({
     requestAnimationFrame(() => {
       if (panelContent.current) panelContent.current.scrollTop = 0;
       stepHeading.current?.focus({ preventScroll: true });
-      if (window.matchMedia("(max-width: 900px)").matches)
-        settingsPanel.current?.scrollIntoView({
-          block: "start",
-          behavior: "smooth",
-        });
     });
   }
   const colorNodes =
@@ -539,7 +555,25 @@ export default function Studio({
       />
     );
   }
+  function updateLabelChoiceColor(nodeIds: string[], value: string) {
+    setEdits((current) => ({
+      ...current,
+      colors: {
+        ...current.colors,
+        ...Object.fromEntries(nodeIds.map((id) => [id, value])),
+      },
+    }));
+  }
+  function resetLabelChoiceColor(nodeIds: string[]) {
+    setEdits((current) => {
+      const colors = { ...current.colors };
+      nodeIds.forEach((id) => delete colors[id]);
+      return { ...current, colors };
+    });
+  }
   function optionControl(option: Template["options"][number]) {
+    const selected = selectedChoice(option, edits.choices[option.id]);
+    const labelNode = template?.nodes.find((n) => n.id === selected.nodeIds[0]);
     return (
       <section
         className="studio-field-group"
@@ -557,8 +591,7 @@ export default function Studio({
                     name={option.id}
                     value={choice.id}
                     checked={
-                      selectedChoice(option, edits.choices[option.id]).id ===
-                      choice.id
+                      selected.id === choice.id
                     }
                     onChange={() => updateEdit("choices", option.id, choice.id)}
                   />
@@ -582,11 +615,22 @@ export default function Studio({
             }}
           />
         )}
-        {selectedChoice(option, edits.choices[option.id]).nodeIds.map((id) =>
-          layerColor(
-            template!.nodes.find((n) => n.id === id),
-            option.id === "reward-icon" ? "赞赏码图标颜色" : undefined,
-          ),
+        {option.id === "label-language" ? (
+          labelNode && (
+            <ColorField
+              label="二维码下方文字颜色"
+              value={edits.colors[labelNode.id] ?? labelNode.color}
+              onChange={(value) => updateLabelChoiceColor(selected.nodeIds, value)}
+              onReset={() => resetLabelChoiceColor(selected.nodeIds)}
+            />
+          )
+        ) : (
+          selected.nodeIds.map((id) =>
+            layerColor(
+              template!.nodes.find((n) => n.id === id),
+              option.id === "reward-icon" ? "赞赏码图标颜色" : undefined,
+            ),
+          )
         )}
       </section>
     );
@@ -679,6 +723,84 @@ export default function Studio({
         o.choices.some((choice) => choice.nodeIds.includes(n.id)),
       ),
   );
+  function studioTools(className = "") {
+    return (
+      <div className={`studio-tools ${className}`.trim()}>
+        <div>
+          <button
+            className="text-button"
+            title="恢复模板默认设置（保留上传的三个码）"
+            aria-label="恢复模板默认设置"
+            onClick={() => {
+              setEdits(resetDefaults?.edits ?? emptyEdits());
+              setStyles(
+                resetDefaults?.styles ?? {
+                  wechat: presetStyle(),
+                  alipay: presetStyle(),
+                },
+              );
+              say("已恢复模板默认设置，上传的三个码已保留");
+            }}
+          >
+            <RotateCcw size={16} />
+            恢复默认
+          </button>
+          <span className="toolbar-divider" />
+          <button
+            className="text-button"
+            disabled={!previewReady}
+            aria-label="放大预览"
+            onClick={() => setInspect(true)}
+          >
+            <Expand size={16} />
+            放大预览
+          </button>
+        </div>
+      </div>
+    );
+  }
+  function panelFooter(className = "") {
+    return (
+      <div className={`panel-footer ${className}`.trim()}>
+        <span className="footer-hint">
+          {adminTemplate
+            ? "可直接下载，修改后点击上方“保存草稿”保留。"
+            : "本模板仅供个人免费使用，禁止售卖或用于任何盈利活动。"}
+        </span>
+        <div className="studio-footer-actions">
+          {step > 0 && (
+            <button
+              type="button"
+              className="secondary"
+              disabled={!!busy}
+              onClick={() => goStep(step - 1)}
+            >
+              <ArrowLeft size={16} /> 上一步
+            </button>
+          )}
+          {step < steps.length - 1 ? (
+            <button
+              type="button"
+              className="secondary"
+              disabled={!template || !!busy}
+              onClick={() => goStep(step + 1)}
+            >
+              下一步 <ArrowRight size={16} />
+            </button>
+          ) : (
+            <button
+              className="primary"
+              disabled={!template || !!busy || rendering}
+              onClick={download}
+            >
+              <Download size={16} />
+              {busy === "download" ? "正在生成…" : "下载高清 PNG"}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
   return (
     <>
       {!adminTemplate && <Header />}
@@ -1078,23 +1200,6 @@ export default function Studio({
                               {template?.options
                                 .filter(isRewardOption)
                                 .map(optionControl)}
-                              {rewardAvatar && (
-                                <div className="field">
-                                  <div className="field-heading">
-                                    <label htmlFor="reward-avatar-opacity">中心头像透明度</label>
-                                    <Reset onClick={() => setEdits((current) => ({
-                                      ...current,
-                                      rewardAvatarOpacity: resetDefaults?.edits.rewardAvatarOpacity ?? 1,
-                                    }))} />
-                                  </div>
-                                  <label className="range-field">
-                                    <span>0% 不透明 · 100% 完全透明<small>{Math.round((1 - (edits.rewardAvatarOpacity ?? 1)) * 100)}%</small></span>
-                                    <input id="reward-avatar-opacity" aria-label="中心头像透明度" type="range" min="0" max="100" step="1"
-                                      value={Math.round((1 - (edits.rewardAvatarOpacity ?? 1)) * 100)}
-                                      onChange={(event) => setEdits((current) => ({ ...current, rewardAvatarOpacity: 1 - Number(event.target.value) / 100 }))} />
-                                  </label>
-                                </div>
-                              )}
                               </div>
                             </details>
                           )}
@@ -1112,12 +1217,16 @@ export default function Studio({
                                 defaultStyle={
                                   resetDefaults?.styles[kind] ?? presetStyle()
                                 }
-                                onChange={(value) =>
+                                onChange={(value) => {
+                                  // A style change keeps only its own payment
+                                  // panel active, so the other code's
+                                  // settings are always collapsed.
+                                  setOpenDisclosure(`style-${kind}`);
                                   setStyles((current) => ({
                                     ...current,
                                     [kind]: value,
-                                  }))
-                                }
+                                  }));
+                                }}
                               />
                             </details>
                           )}
@@ -1146,7 +1255,7 @@ export default function Studio({
                       </span>
                       <div>
                         <strong>三码统一颜色</strong>
-                        <span>三个码一起变色，右下角图标同步内部码颜色</span>
+                        <span>三个码、中心预设图案和右下角图标同步变色，上传头像保留原色</span>
                       </div>
                     </summary>
                     <div className="shared-color-controls">
@@ -1278,82 +1387,28 @@ export default function Studio({
                   .filter((option) => option.id === "label-language")
                   .map(optionControl)}
               </div>
+              <div
+                className="studio-page save-page"
+                hidden={step !== 3}
+                role="region"
+                aria-label="保存高清成品"
+              >
+                <h3>保存高清成品</h3>
+                <p>
+                  点击下方下载按钮生成当前成品；出现预览后，长按图片即可保存到相册。
+                </p>
+              </div>
               {downloaded && (
                 <div className="success-message">
                   <CheckCheck size={18} />
                   高清图片已下载，感谢每一份心意。
                 </div>
               )}
+              {studioTools("mobile-studio-tools")}
+              {panelFooter("mobile-panel-footer")}
             </div>
-            <div className="studio-tools">
-              <div>
-                <button
-                  className="text-button"
-                  title="恢复模板默认设置（保留上传的三个码）"
-                  aria-label="恢复模板默认设置"
-                  onClick={() => {
-                    setEdits(resetDefaults?.edits ?? emptyEdits());
-                    setStyles(
-                      resetDefaults?.styles ?? {
-                        wechat: presetStyle(),
-                        alipay: presetStyle(),
-                      },
-                    );
-                    say("已恢复模板默认设置，上传的三个码已保留");
-                  }}
-                >
-                  <RotateCcw size={16} />
-                  恢复默认
-                </button>
-                <span className="toolbar-divider" />
-                <button
-                  className="text-button"
-                  disabled={!previewReady}
-                  aria-label="放大预览"
-                  onClick={() => setInspect(true)}
-                >
-                  <Expand size={16} />
-                  放大预览
-                </button>
-              </div>
-            </div>
-            <div className="panel-footer">
-              <span className="footer-hint">
-                {adminTemplate
-                  ? "可直接下载，修改后点击上方“保存草稿”保留。"
-                  : "本模板仅供个人免费使用，禁止售卖或用于任何盈利活动。"}
-              </span>
-              <div className="studio-footer-actions">
-                {step > 0 && (
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={!!busy}
-                    onClick={() => goStep(step - 1)}
-                  >
-                    <ArrowLeft size={16} /> 上一步
-                  </button>
-                )}
-                {step < steps.length - 1 && (
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={!template || !!busy}
-                    onClick={() => goStep(step + 1)}
-                  >
-                    下一步 <ArrowRight size={16} />
-                  </button>
-                )}
-                <button
-                  className="primary"
-                  disabled={!template || !!busy || rendering}
-                  onClick={download}
-                >
-                  <Download size={16} />
-                  {busy === "download" ? "正在导出…" : "下载高清 PNG"}
-                </button>
-              </div>
-            </div>
+            {studioTools("desktop-studio-tools")}
+            {panelFooter("desktop-panel-footer")}
           </section>
         </div>
         {error && (
@@ -1387,26 +1442,14 @@ export default function Studio({
         />
       )}
       {rewardAlignment && template && (() => {
-        const reward = template.nodes.find((node) => node.role === "reward");
-        const avatar = template.nodes.find((node) => node.role === "rewardAvatar");
-        if (!reward || !avatar) return null;
-        const outputSize = Math.min(reward.width, reward.height);
-        const outputX = reward.x + (reward.width - outputSize) / 2;
-        const outputY = reward.y + (reward.height - outputSize) / 2;
-        const avatarSize = Math.min(avatar.width, avatar.height) / outputSize;
-        // Leave a narrow safety margin inside the real cover so a slight
-        // alignment error cannot leave the original avatar edge exposed.
-        const guideSize = avatarSize * 0.94;
+        const guide = rewardAlignmentGuide(template);
+        if (!guide) return null;
         return (
           <RewardAlignDialog
             src={rewardAlignment.image}
             initial={rewardAlignment.initial}
             defaultCrop={rewardAlignment.defaultCrop}
-            guide={{
-              x: (avatar.x - outputX) / outputSize + (avatarSize - guideSize) / 2,
-              y: (avatar.y - outputY) / outputSize + (avatarSize - guideSize) / 2,
-              size: guideSize,
-            }}
+            guide={guide}
             onClose={() => setRewardAlignment(undefined)}
             onConfirm={(bounds) => {
               setCodes((current) => ({
@@ -1451,9 +1494,6 @@ export default function Studio({
           <div className="mobile-save-actions">
             <button type="button" className="secondary" onClick={closeExportImage}>
               返回编辑
-            </button>
-            <button type="button" className="primary" onClick={saveExportImage}>
-              <Download size={16} /> 打开原图
             </button>
           </div>
         </div>

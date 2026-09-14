@@ -89,22 +89,31 @@ export default function ColorPicker({
     panel.current?.hidePopover();
     trigger.current?.focus({ preventScroll: true });
   }
-  function point(event: React.PointerEvent<HTMLDivElement>) {
-    const bounds = event.currentTarget.getBoundingClientRect();
+  function pointAt(target: HTMLDivElement, clientX: number, clientY: number) {
+    const bounds = target.getBoundingClientRect();
     update({
       ...hsv,
       s: Math.max(
         0,
-        Math.min(100, ((event.clientX - bounds.left) / bounds.width) * 100),
+        Math.min(100, ((clientX - bounds.left) / bounds.width) * 100),
       ),
       v: Math.max(
         0,
         Math.min(
           100,
-          100 - ((event.clientY - bounds.top) / bounds.height) * 100,
+          100 - ((clientY - bounds.top) / bounds.height) * 100,
         ),
       ),
     });
+  }
+  function point(event: React.PointerEvent<HTMLDivElement>) {
+    pointAt(event.currentTarget, event.clientX, event.clientY);
+  }
+  function touchPoint(event: React.TouchEvent<HTMLDivElement>) {
+    const touch = event.touches[0];
+    if (!touch) return;
+    event.preventDefault();
+    pointAt(event.currentTarget, touch.clientX, touch.clientY);
   }
 
   return (
@@ -165,13 +174,28 @@ export default function ColorPicker({
               aria-label="饱和度与明度色板，方向键微调"
               tabIndex={0}
               onPointerDown={(event) => {
-                event.currentTarget.setPointerCapture(event.pointerId);
+                event.preventDefault();
+                // Pointer Events work in modern browsers. The touch handlers
+                // below cover WebViews that do not keep pointer capture while
+                // a finger moves across the palette.
+                event.currentTarget.setPointerCapture?.(event.pointerId);
                 point(event);
               }}
               onPointerMove={(event) => {
-                if (event.currentTarget.hasPointerCapture(event.pointerId))
+                event.preventDefault();
+                if (event.currentTarget.hasPointerCapture?.(event.pointerId))
                   point(event);
               }}
+              onPointerUp={(event) => {
+                if (event.currentTarget.hasPointerCapture?.(event.pointerId))
+                  event.currentTarget.releasePointerCapture?.(event.pointerId);
+              }}
+              onPointerCancel={(event) => {
+                if (event.currentTarget.hasPointerCapture?.(event.pointerId))
+                  event.currentTarget.releasePointerCapture?.(event.pointerId);
+              }}
+              onTouchStart={touchPoint}
+              onTouchMove={touchPoint}
               onKeyDown={(event) => {
                 const step = event.shiftKey ? 10 : 1;
                 if (

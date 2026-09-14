@@ -148,6 +148,7 @@ export const templateSchema = z.object({
   rewardLayersVersion: z.literal(1).optional(),
   rewardColorVersion: z.literal(1).optional(),
   rewardIconColorVersion: z.literal(1).optional(),
+  labelColorVersion: z.literal(1).optional(),
   codePlacementVersion: z.literal(1).optional(),
   defaults: defaultsSchema.optional(),
 });

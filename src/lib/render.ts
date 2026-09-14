@@ -12,10 +12,37 @@ import { resolveDefaultDisplay } from "./default-display";
 import { backgroundRect, backgroundViewport } from "./background-transform";
 import { qrModules, quietBox, codeFrame, isCodeFrame } from "./code-placement";
 import { tintRewardPixels } from "./layer-colors";
-import { codeColors, codeInkLayer, rewardArtworkIds, unifiedQRColor } from "./code-appearance";
+import {
+  codeColors,
+  codeInkLayer,
+  rewardArtworkIds,
+  rewardPresetArtworkIds,
+  unifiedQRColor,
+} from "./code-appearance";
+import { nightRewardBackdropMask } from "./reward-night-mode";
 const cache = new Map<string, Promise<HTMLImageElement>>();
 const fonts = new Map<string, Promise<string>>();
 const tints = new Map<string, HTMLCanvasElement>();
+
+export type RenderOptions = {
+  // The desktop editor/export must match the admin's saved code-layer bounds
+  // exactly. Mobile keeps its current frame-safe presentation unchanged.
+  preserveCodeGeometry?: boolean;
+};
+
+function clearNightRewardBackdrop(canvas: HTMLCanvasElement) {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+  const { width, height } = canvas;
+  const pixels = ctx.getImageData(0, 0, width, height);
+  const removed = nightRewardBackdropMask(pixels.data, width, height);
+  let changed = false;
+  for (let index = 0; index < removed.length; index++) {
+    if (!removed[index]) continue;
+    pixels.data[index * 4 + 3] = 0;
+    changed = true;
+  }
+  if (changed) ctx.putImageData(pixels, 0, 0);
+}
 function fontFamily(src: string) {
   if (!fonts.has(src)) {
     const family = `LinkoraFont${fonts.size}`;
@@ -54,6 +81,7 @@ export async function drawTemplate(
   codes: Partial<Record<CodeKind, CodeInput>>,
   styles: Record<"wechat" | "alipay", QRStyle>,
   scale = 1,
+  options: RenderOptions = {},
 ) {
   const resolved = resolveDefaultDisplay(t, edits, codes, styles);
   t = resolved.template;
@@ -66,7 +94,7 @@ export async function drawTemplate(
     alipay: unifiedQRColor(styles.alipay, colors.ink),
   };
   const iconIds = rewardArtworkIds(t, "rewardIcon");
-  const avatarIds = rewardArtworkIds(t, "rewardAvatar");
+  const presetAvatarIds = rewardPresetArtworkIds(t, "rewardAvatar");
   const c = makeCanvas(t.width * scale, t.height * scale),
     ctx = c.getContext("2d")!;
   ctx.scale(scale, scale);
@@ -150,15 +178,19 @@ export async function drawTemplate(
   await Promise.all(Array.from(preload, image));
   for (const n of visibleNodes) {
     ctx.save();
-    ctx.globalAlpha = n.opacity * (avatarIds.has(n.id) ? (edits.rewardAvatarOpacity ?? 1) : 1);
+    ctx.globalAlpha = n.opacity;
     // Apply the PSD group mask before any backing, generated code or overlay.
     // The frame itself stays outside this mask, so artwork cannot cover its stroke.
+    const isCodeLayer = ["wechat", "alipay", "reward"].includes(n.role);
     if (
-      ["wechat", "alipay", "reward"].includes(n.role) ||
+      isCodeLayer ||
       (n.id.startsWith("7-") && !isCodeFrame(n))
     ) {
       const frame = codeFrame(t, n);
-      if (frame) {
+      // The phone result continues to use the PSD's inner frame. On desktop,
+      // the code layer's saved admin geometry is authoritative: do not crop
+      // it back into an older fixed frame after the admin has adjusted it.
+      if (frame && (!options.preserveCodeGeometry || !isCodeLayer)) {
         const round = frame.id === "7-0";
         const sx = frame.width / 371,
           sy = frame.height / (round ? 371 : 372),
@@ -242,6 +274,7 @@ export async function drawTemplate(
           tmp.width,
           tmp.height,
         );
+      clearNightRewardBackdrop(tmp);
       cropped = tmp;
       src = code.image;
     }
@@ -287,8 +320,13 @@ export async function drawTemplate(
       dy = n.y,
       dw = n.width,
       dh = n.height;
-    if (generatedBox) {
+    if (generatedBox && !options.preserveCodeGeometry) {
       ({ x: dx, y: dy, width: dw, height: dh } = generatedBox);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(dx, dy, dw, dh);
+    } else if (generatedBox) {
+      // The generated source already contains its own four-module quiet zone.
+      // Keep all of it inside the exact bounds stored in the admin editor.
       ctx.fillStyle = "#fff";
       ctx.fillRect(dx, dy, dw, dh);
     } else if (
@@ -304,9 +342,14 @@ export async function drawTemplate(
     }
     if (n.role === "reward" && cropped) {
       // Screenshot crop dimensions never determine the destination size.
-      dw = dh = Math.min(n.width, n.height);
-      dx = n.x + (n.width - dw) / 2;
-      dy = n.y + (n.height - dh) / 2;
+      if (!options.preserveCodeGeometry) {
+        dw = dh = Math.min(n.width, n.height);
+        dx = n.x + (n.width - dw) / 2;
+        dy = n.y + (n.height - dh) / 2;
+      }
+      // The fixed reward frame clips this fill to its inner circle.
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(n.x, n.y, n.width, n.height);
     }
     if (n.id === "7-3" && src === "/private-assets/layer-7-3.png") {
       // Extend only the upper fixed badge cover, retaining its round alpha mask.
@@ -316,6 +359,25 @@ export async function drawTemplate(
       dy -= (n.height * 6) / 59;
       dw += (n.width * 2) / 59;
       dh += (n.height * 6) / 59;
+    }
+    if (n.id === "7-2-0") {
+      // Leave a little more of the original QR modules visible around the
+      // centre artwork. The star/avatar remains at its PSD size; only its
+      // white backing shrinks slightly.
+      const scale = 0.9;
+      dw = n.width * scale;
+      dh = n.height * scale;
+      dx = n.x + (n.width - dw) / 2;
+      dy = n.y + (n.height - dh) / 2;
+      // Keep a minimal opaque bleed for the PSD mask's transparent fringe.
+      const bleed = 1;
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(
+        dx - bleed,
+        dy - bleed,
+        dw + bleed * 2,
+        dh + bleed * 2,
+      );
     }
     if (cropped || src !== n.src) {
       // The fixed white cover belongs below the replaceable artwork in the
@@ -373,11 +435,28 @@ export async function drawTemplate(
       ctx.rect(viewport.x, viewport.y, viewport.width, viewport.height);
       ctx.clip();
     }
-    const inkLayer = codeInkLayer(n, iconIds);
+    const isReplacementRewardIcon =
+      iconIds.has(n.id) && (n.role !== "rewardIcon" || src !== n.src);
+    if (isReplacementRewardIcon) {
+      // Keep the larger artwork inside the badge's intended corner while
+      // covering the original source icon and its antialiased edge.
+      const scale = 1.18;
+      const width = dw * scale;
+      const height = dh * scale;
+      dx -= (width - dw) / 2;
+      dy -= (height - dh) / 2;
+      dw = width;
+      dh = height;
+    }
+    const inkLayer = codeInkLayer(n, iconIds, presetAvatarIds);
     const generatedCode =
       (n.role === "wechat" || n.role === "alipay") && !!code?.content;
     if (!generatedCode && (inkLayer || isCodeFrame(n) || n.colorEditable)) {
-      const color = inkLayer ? colors.ink : isCodeFrame(n) ? colors.frame : (edits.colors[n.id] ?? n.color);
+      const color = inkLayer
+        ? colors.ink
+        : isCodeFrame(n)
+          ? colors.frame
+          : edits.colors[n.id] ?? n.color;
       const key = JSON.stringify([
         src,
         n.role,
@@ -386,6 +465,7 @@ export async function drawTemplate(
         n.id === "7-0",
         n.width,
         n.height,
+        presetAvatarIds.has(n.id),
       ]);
       let tint = cropped ? undefined : tints.get(key);
       if (!tint) {
@@ -394,7 +474,7 @@ export async function drawTemplate(
         tc.drawImage(im, 0, 0);
         if (inkLayer) {
           const pixels = tc.getImageData(0, 0, tint.width, tint.height);
-          tintRewardPixels(pixels.data, color);
+          tintRewardPixels(pixels.data, color, presetAvatarIds.has(n.id));
           tc.putImageData(pixels, 0, 0);
         } else {
           tc.globalCompositeOperation = "source-in";

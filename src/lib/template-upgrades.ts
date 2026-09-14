@@ -1,6 +1,7 @@
 import { Template, TemplateNode } from "./model";
 import {
   defaultLayerColors,
+  editableLabelColor,
   editableRewardColor,
   editableRewardIconColor,
 } from "./layer-colors";
@@ -56,7 +57,7 @@ export function editableFooter(t: Template): Template {
       })),
     };
   }
-  return editableRewardIconColor(editableRewardColor(editableRewardLayers(defaultLayerColors({
+  return editableLabelColor(editableRewardIconColor(editableRewardColor(editableRewardLayers(defaultLayerColors({
     ...t,
     nodes: nodes.map((n) => {
       if (
@@ -83,5 +84,5 @@ export function editableFooter(t: Template): Template {
         color: "#bfbfbf",
       };
     }),
-  }))));
+  })))))
 }

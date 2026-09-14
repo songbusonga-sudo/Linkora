@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { codeColors, rewardArtworkIds, unifiedQRColor } from "../src/lib/code-appearance";
+import {
+  codeColors,
+  codeInkLayer,
+  rewardArtworkIds,
+  rewardPresetArtworkIds,
+  unifiedQRColor,
+} from "../src/lib/code-appearance";
 import { defaultsSchema, emptyEdits, Template } from "../src/lib/model";
 import { presetStyle, restyleQR } from "../src/lib/qr";
 import { normalizeRecentColors } from "../src/lib/recent-colors";
@@ -19,16 +25,14 @@ test("all style presets and style reset retain the chosen unified ink", () => {
 
 test("shared appearance survives saved defaults and user overrides", () => {
   const defaults = defaultsSchema.parse({
-    edits: { ...emptyEdits(), codeColors: { frame: "#123456", ink: "#285ca3" }, rewardAvatarOpacity: 0.3 },
+    edits: { ...emptyEdits(), codeColors: { frame: "#123456", ink: "#285ca3" } },
     codes: {}, styles: { wechat: presetStyle(), alipay: presetStyle() },
   });
   const t = { nodes: [], defaults } as unknown as Template;
   const initial = resolveDefaultDisplay(t, emptyEdits(), {}, defaults.styles);
   assert.deepEqual(codeColors(t, initial.edits, initial.styles.wechat), defaults.edits.codeColors);
-  assert.equal(initial.edits.rewardAvatarOpacity, 0.3);
-  const user = resolveDefaultDisplay(t, { ...emptyEdits(), codeColors: { ink: "#654321" }, rewardAvatarOpacity: 0 }, {}, defaults.styles);
+  const user = resolveDefaultDisplay(t, { ...emptyEdits(), codeColors: { ink: "#654321" } }, {}, defaults.styles);
   assert.deepEqual(user.edits.codeColors, { frame: "#123456", ink: "#654321" });
-  assert.equal(user.edits.rewardAvatarOpacity, 0);
   assert.throws(() => defaultsSchema.parse({ ...defaults, edits: { ...defaults.edits, rewardAvatarOpacity: 1.1 } }));
 });
 
@@ -42,6 +46,15 @@ test("reward appearance follows uploaded targets and every preset without fading
   ] } as unknown as Template;
   assert.deepEqual([...rewardArtworkIds(t, "rewardAvatar")], ["avatar", "avatar1", "avatar2"]);
   assert.deepEqual([...rewardArtworkIds(t, "rewardIcon")], ["icon", "icon1", "icon2"]);
+  assert.deepEqual([...rewardPresetArtworkIds(t, "rewardAvatar")], ["avatar1", "avatar2"]);
+  assert.equal(
+    codeInkLayer({ id: "avatar1", role: "image" } as never, new Set(), rewardPresetArtworkIds(t, "rewardAvatar")),
+    true,
+  );
+  assert.equal(
+    codeInkLayer({ id: "avatar", role: "rewardAvatar" } as never, new Set(), rewardPresetArtworkIds(t, "rewardAvatar")),
+    false,
+  );
 });
 
 test("recent colors reject invalid storage, normalize, deduplicate and keep the newest eight", () => {

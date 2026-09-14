@@ -20,7 +20,18 @@ export default function RootLayout({
           fetchPriority="high"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        <footer className="site-record">
+          <a
+            href="https://beian.miit.gov.cn/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            桂ICP备2026020596号
+          </a>
+        </footer>
+      </body>
     </html>
   );
 }

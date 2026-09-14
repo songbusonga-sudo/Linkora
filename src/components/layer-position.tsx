@@ -449,7 +449,9 @@ export default function LayerPosition({
             恢复已保存大小
           </button>
           <p className="muted">
-            蓝框为{node.role === "reward" ? "赞赏码图层" : "编码主体"}
+            蓝框为{node.role === "reward"
+                ? "赞赏码图层"
+                : "编码主体"}
             ，可拖动四角等比缩放。允许超出外框，超出部分按剪切蒙版裁掉，外框始终显示；赞赏码覆盖层同步对齐。前台不能调整尺寸或位置。
           </p>
         </div>

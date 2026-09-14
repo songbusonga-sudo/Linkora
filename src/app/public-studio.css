@@ -1,5 +1,10 @@
 /* User-facing studio only; the embedded admin editor keeps its own layout. */
 
+.mobile-studio-tools,
+.mobile-panel-footer {
+  display: none;
+}
+
 @media (min-width: 901px) {
   .public-studio {
     --desktop-scale: 0.67;
@@ -25,12 +30,16 @@
 @media (max-width: 900px) {
   .public-studio {
     background: #f5f6f4;
-    min-height: 100dvh;
+    /* The editor itself owns the entire phone viewport. */
+    min-height: 0;
     --muted: #7c8586;
   }
+  /* Keep the global record from creating a second, outer page scroll area. */
+  .public-studio ~ .site-record {
+    display: none;
+  }
   .public-studio > .header {
-    height: 60px;
-    padding: 0 20px;
+    display: none;
   }
   .public-studio .brand {
     font-size: 23px;
@@ -41,46 +50,64 @@
   }
   .public-studio > .studio {
     max-width: 600px;
-    padding: 16px 16px calc(148px + env(safe-area-inset-bottom));
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    overflow: hidden;
+    padding: 0 16px;
     font-size: 14px;
   }
   .public-studio .workspace {
     grid-template-columns: minmax(0, 1fr);
-    gap: 16px;
+    /* Keep the artwork at its natural, full-width size. On short screens the
+       preview is cropped instead of shrinking, so its contents stay legible. */
+    grid-template-rows: minmax(0, min(56%, calc(100vw - 16px))) minmax(0, 1fr);
+    height: 100%;
+    gap: 20px;
   }
   .public-studio .preview-panel {
-    position: static;
+    position: relative;
     background: white;
-    border-radius: 16px;
+    /* Keep the preview as a distinct, four-corner rounded card above the
+       controls, matching the mobile reference layout. */
+    border-radius: 24px;
+    border: 0;
+    overflow: hidden;
   }
   .public-studio .preview-stage {
+    height: 100%;
     padding: 0;
     min-height: 0;
     background: white;
+    justify-content: flex-start;
   }
   .public-studio .artboard {
     max-width: none;
     box-shadow: none;
   }
   .public-studio .settings-panel {
-    contain: none;
+    contain: size;
+    height: 100%;
     min-height: 0;
-    overflow: visible;
+    overflow: hidden;
     background: white;
-    border-radius: 16px;
+    border-radius: 24px;
   }
   .public-studio .panel-heading {
     display: none;
   }
   .public-studio .studio-step-progress {
-    padding: 12px 16px;
-    gap: 8px;
+    padding: 12px;
+    gap: 4px;
   }
   .public-studio .studio-step-progress li > button {
-    font-size: 11px;
+    gap: 4px;
+    font-size: 9px;
   }
   .public-studio .panel-content {
-    overflow: visible;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
     min-height: 0;
     padding: 16px;
   }
@@ -169,18 +196,25 @@
   .public-studio .studio-tools > div {
     justify-content: space-between;
   }
-  .public-studio .panel-footer {
-    position: fixed;
-    z-index: 20;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    padding: 10px max(16px, calc((100vw - 568px) / 2))
-      calc(12px + env(safe-area-inset-bottom));
+  .public-studio .desktop-studio-tools,
+  .public-studio .desktop-panel-footer {
+    display: none;
+  }
+  .public-studio .mobile-studio-tools {
+    display: block;
+    margin: 24px -16px 0;
+    padding: 10px 16px;
+  }
+  .public-studio .mobile-panel-footer {
+    display: flex;
+    position: static;
+    inset: auto;
+    margin: 0 -16px -16px;
+    padding: 16px;
+    box-shadow: none;
+    backdrop-filter: none;
     gap: 8px;
-    background: #fffffff5;
-    box-shadow: 0 -4px 20px #20263008;
-    backdrop-filter: blur(12px);
+    background: #fff;
   }
   .public-studio .footer-hint {
     width: 100%;
@@ -203,6 +237,24 @@
   .public-studio .studio-footer-actions .secondary svg {
     display: none;
   }
+  .public-studio .save-page {
+    display: grid;
+    gap: 10px;
+    min-height: 140px;
+    align-content: center;
+    text-align: center;
+  }
+  .public-studio .save-page h3 {
+    margin: 0;
+    color: #42553e;
+    font-size: 18px;
+  }
+  .public-studio .save-page p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.7;
+  }
   .public-studio .code-color-controls > summary,
   .public-studio .code-style-options > summary {
     min-height: 44px;
@@ -224,6 +276,9 @@
   }
   .public-studio .modal-actions button {
     padding-inline: 12px;
+  }
+  .public-studio .mobile-save-actions {
+    grid-template-columns: 1fr;
   }
   .public-studio .avatar-crop-images {
     grid-template-columns: 1fr;

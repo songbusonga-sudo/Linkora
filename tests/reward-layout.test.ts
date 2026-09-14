@@ -4,6 +4,8 @@ import { nodeSchema, templateSchema, validateTemplate } from "../src/lib/model";
 import { editableRewardLayers } from "../src/lib/reward-layers";
 import { resizeCode } from "../src/lib/layer-position";
 import { detectRewardCrop } from "../src/lib/reward-crop";
+import { nightRewardBackdropMask } from "../src/lib/reward-night-mode";
+import { rewardAlignmentGuide } from "../src/lib/reward-alignment";
 
 const n = (
   id: string,
@@ -115,11 +117,21 @@ test("admin code resizing preserves center, aspect ratio, overlay offsets and us
     );
     assert.equal(moved.sizeEditable, false);
   }
+  const avatar = result.find((n) => n.role === "rewardAvatar")!;
+  const guide = rewardAlignmentGuide({ ...t, nodes: result })!;
+  const outputSize = Math.min(resized.width, resized.height);
+  const outputX = resized.x + (resized.width - outputSize) / 2;
+  const outputY = resized.y + (resized.height - outputSize) / 2;
+  // A user aligns their source avatar to this guide. Its centre must stay on
+  // the scaled template cover even after an admin changes reward-code size.
+  assert.ok(Math.abs(guide.x + guide.size / 2 - (avatar.x + avatar.width / 2 - outputX) / outputSize) < 1e-9);
+  assert.ok(Math.abs(guide.y + guide.size / 2 - (avatar.y + avatar.height / 2 - outputY) / outputSize) < 1e-9);
   const together = resizeCode(t, code, code.width * 2, true);
   assert.equal(together.find((n) => n.id === "7-0")!.width, 371);
   validateTemplate(templateSchema.parse({ ...t, nodes: together }));
   assert.equal(resizeCode(t, code, NaN), t.nodes);
 });
+
 test("automatic reward cropping locates a code separately from screenshot captions", () => {
   const width = 300,
     height = 500,
@@ -147,4 +159,22 @@ test("automatic reward cropping locates a code separately from screenshot captio
       height,
     ),
   );
+});
+
+test("night reward cleanup removes only the dark backdrop connected to the crop edge", () => {
+  const width = 9;
+  const data = new Uint8ClampedArray(width * width * 4).fill(255);
+  const black = (x: number, y: number) => {
+    const offset = (y * width + x) * 4;
+    data[offset] = data[offset + 1] = data[offset + 2] = 0;
+  };
+  // The surrounding night page is black, while the central QR sits on white.
+  for (let x = 0; x < width; x++)
+    for (let y = 0; y < width; y++)
+      if (x < 2 || x > 6 || y < 2 || y > 6) black(x, y);
+  black(4, 4);
+
+  const removed = nightRewardBackdropMask(data, width, width);
+  assert.equal(removed[0], 1);
+  assert.equal(removed[4 * width + 4], 0);
 });

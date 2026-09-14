@@ -195,6 +195,16 @@ label {
   padding: 0 5%;
   background: #fff;
 }
+.site-record {
+  padding: 18px 20px 24px;
+  color: #93979e;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+.site-record a:hover {
+  color: #657764;
+}
 .brand {
   display: flex;
   align-items: center;
@@ -1682,6 +1692,13 @@ input.soft-color-hue {
   background: #fff;
   box-shadow: 0 12px 36px #242d3824;
   -webkit-user-drag: auto;
+}
+.export-image-preloader {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 .mobile-save-actions {
   position: fixed;
@@ -3201,6 +3218,7 @@ input.soft-color-hue {
   display: flex;
   width: 100%;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   border: 0;
   padding: 0;

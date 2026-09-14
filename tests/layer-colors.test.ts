@@ -4,6 +4,7 @@ import { nodeSchema, templateSchema } from "../src/lib/model";
 import {
   defaultLayerColor,
   defaultLayerColors,
+  editableLabelColor,
   editableRewardColor,
   editableRewardIconColor,
   tintRewardPixels,
@@ -106,6 +107,18 @@ test("reward tint preserves white, transparency and antialiased ink", () => {
   assert.deepEqual(Array.from(pixels.slice(16)), [32, 64, 128, 128]);
 });
 
+test("gray preset artwork uses the chosen ink while preserving white and transparency", () => {
+  const pixels = new Uint8ClampedArray([
+    106, 106, 106, 255, 180, 180, 180, 255,
+    255, 255, 255, 255, 0, 0, 0, 0,
+  ]);
+  tintRewardPixels(pixels, "#285ca3", true);
+  assert.deepEqual([...pixels.slice(0, 4)], [40, 92, 163, 255]);
+  assert.ok(pixels[4] > 40 && pixels[4] < pixels[5] && pixels[5] < pixels[6]);
+  assert.deepEqual([...pixels.slice(8, 12)], [255, 255, 255, 255]);
+  assert.equal(pixels[15], 0);
+});
+
 test("each selectable reward icon accepts its own colour overlay", () => {
   const template = templateSchema.parse({
     id: "icon-colors",
@@ -139,4 +152,21 @@ test("each selectable reward icon accepts its own colour overlay", () => {
     assert.equal(upgraded.nodes.find((n) => n.id === id)?.colorEditable, true);
   upgraded.nodes[1].color = "#123456";
   assert.deepEqual(editableRewardIconColor(upgraded), upgraded);
+});
+
+test("Chinese and English code captions each accept their own colour overlay", () => {
+  const template = templateSchema.parse({
+    id: "label-colors", name: "Label colors", description: "", width: 2048, height: 2048,
+    cover: "/private-assets/mock.png", font: "/private-assets/mock.ttf", assets: [], verified: true, version: 1,
+    nodes: [node("5-1", "wechat"), node("6-1", "alipay"), node("7-1", "reward"), node("8-0"), node("9-0"), node("9-3"), node("9-4")],
+    options: [{ id: "label-language", name: "二维码下方文字", defaultId: "zh", choices: [
+      { id: "zh", name: "中文", nodeIds: ["8-0"] },
+      { id: "en", name: "英文", nodeIds: ["9-0", "9-3", "9-4"] },
+    ] }],
+  });
+  const upgraded = editableLabelColor(template);
+  for (const id of ["8-0", "9-0", "9-3", "9-4"])
+    assert.equal(upgraded.nodes.find((n) => n.id === id)?.colorEditable, true);
+  assert.equal(upgraded.nodes.find((n) => n.id === "8-0")?.color, "#a0a0a0");
+  assert.deepEqual(editableLabelColor(upgraded), upgraded);
 });
